@@ -1,1 +1,2238 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>スケールビューア v1.4</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0c0c0c; }
+button:hover { filter: brightness(1.12); }
+/* タップ可能な要素のhover/active */
+.sv-tappable { cursor: pointer; transition: all 0.12s; }
+.sv-tappable:hover { filter: brightness(1.15); }
+.sv-tappable:active { transform: scale(0.97); opacity: 0.85; }
+/* 押した時に枠だけが一瞬光って消える */
+.sv-flash-border:active { border-color: #d4a843 !important; box-shadow: 0 0 8px rgba(212,168,67,0.5); }
+/* スクロールバーを非表示（スクロール機能は維持） */
+.sv-hide-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.sv-hide-scrollbar::-webkit-scrollbar { display: none; }
+.sv-right-area { display: block; }
+.sv-mid { }
+.sv-board { }
+@media (min-width: 768px) {
+  .sv-right-area { display: flex; gap: 10px; align-items: stretch; }
+  .sv-mid { flex: 0 0 300px; display: flex; }
+  .sv-mid > div { display: flex; flex-direction: column; height: 100%; width: 100%; }
+  .sv-board { flex: 1 1 0; min-width: 0; display: flex; }
+  .sv-board > div { display: flex; flex-direction: column; height: 100%; flex: 1; }
+  .sv-detail-toggle { display: none !important; }
+  .sv-detail-area { display: block !important; }
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
+// ============================================================
+// Guitar Scale Viewer v1.4 — 左カラム廃止・追加ポップアップ方式
+// ============================================================
+
+const NOTES_SHARP = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+const NOTES_FLAT  = ["C","D♭","D","E♭","E","F","G♭","G","A♭","A","B♭","B"];
+const TUNING = [4, 9, 2, 7, 11, 4];
+const TUNING_NAMES = ["E","A","D","G","B","E"];
+const NUM_STRINGS = 6;
+const DEFAULT_NUM_FRETS = 21;
+const FRET_MARKERS = [3,5,7,9,12,15,17,19,21];
+const DOUBLE_MARKERS = [12];
+
+// ============================================================
+// スケール統合定義 (SCALE_DEFS)
+// ============================================================
+// semitones: 半音配列（内部計算用）
+// degreeTokens: 理論綴り用の度数トークン（内部用, ASCII: b/#）
+// displayDegrees: UI表示用の度数（♭/♯ Unicode）
+// defaultFlat: ♭表記をデフォルトにするか
+//
+// 変更は全てここで行う。SCALESやSCALE_THEORYへの二重管理は不要。
+// ============================================================
+const SCALE_DEFS = {
+  "Major":            { semitones:[0,2,4,5,7,9,11],   degreeTokens:["1","2","3","4","5","6","7"],               displayDegrees:["R","2","3","4","5","6","7"] },
+  "Natural Minor":    { semitones:[0,2,3,5,7,8,10],   degreeTokens:["1","2","b3","4","5","b6","b7"],            displayDegrees:["R","2","♭3","4","5","♭6","♭7"],       defaultFlat:true },
+  "Major Pentatonic": { semitones:[0,2,4,7,9],         degreeTokens:["1","2","3","5","6"],                       displayDegrees:["R","2","3","5","6"] },
+  "Minor Pentatonic": { semitones:[0,3,5,7,10],        degreeTokens:["1","b3","4","5","b7"],                     displayDegrees:["R","♭3","4","5","♭7"],                defaultFlat:true },
+  "Blues":            { semitones:[0,3,5,6,7,10],      degreeTokens:["1","b3","4","b5","5","b7"],                displayDegrees:["R","♭3","4","♭5","5","♭7"],           defaultFlat:true },
+  "Dorian":           { semitones:[0,2,3,5,7,9,10],   degreeTokens:["1","2","b3","4","5","6","b7"],             displayDegrees:["R","2","♭3","4","5","6","♭7"],        defaultFlat:true },
+  "Phrygian":         { semitones:[0,1,3,5,7,8,10],   degreeTokens:["1","b2","b3","4","5","b6","b7"],           displayDegrees:["R","♭2","♭3","4","5","♭6","♭7"],     defaultFlat:true },
+  "Lydian":           { semitones:[0,2,4,6,7,9,11],   degreeTokens:["1","2","3","#4","5","6","7"],              displayDegrees:["R","2","3","#4","5","6","7"] },
+  "Mixolydian":       { semitones:[0,2,4,5,7,9,10],   degreeTokens:["1","2","3","4","5","6","b7"],              displayDegrees:["R","2","3","4","5","6","♭7"] },
+  "Locrian":          { semitones:[0,1,3,5,6,8,10],   degreeTokens:["1","b2","b3","4","b5","b6","b7"],          displayDegrees:["R","♭2","♭3","4","♭5","♭6","♭7"],    defaultFlat:true },
+  "Melodic Minor":    { semitones:[0,2,3,5,7,9,11],   degreeTokens:["1","2","b3","4","5","6","7"],              displayDegrees:["R","2","♭3","4","5","6","7"],         defaultFlat:true },
+  "Harmonic Minor":   { semitones:[0,2,3,5,7,8,11],   degreeTokens:["1","2","b3","4","5","b6","7"],             displayDegrees:["R","2","♭3","4","5","♭6","7"],        defaultFlat:true },
+  "Altered":          { semitones:[0,1,3,4,6,8,10],   degreeTokens:["1","b9","#9","3","#11","b13","b7"],        displayDegrees:["R","♭9","#9","3","#11","♭13","♭7"],  defaultFlat:true },
+  "Whole Tone":       { semitones:[0,2,4,6,8,10],     degreeTokens:["1","2","3","#4","#5","b7"],                displayDegrees:["R","2","3","#4","♭6","♭7"],           defaultFlat:true },
+  "Diminished":       { semitones:[0,2,3,5,6,8,9,11], degreeTokens:["1","2","b3","4","b5","b6","6","7"],        displayDegrees:["R","2","♭3","4","♭5","♭6","6","7"],  defaultFlat:true },
+  "Lydian ♭7":        { semitones:[0,2,4,6,7,9,10],   degreeTokens:["1","2","3","#4","5","6","b7"],             displayDegrees:["R","2","3","#4","5","6","♭7"] },
+  "HMP5 below":       { semitones:[0,1,4,5,7,8,10],   degreeTokens:["1","b2","3","4","5","b6","b7"],            displayDegrees:["R","♭2","3","4","5","♭6","♭7"],      defaultFlat:true },
+  "Combination of Diminished": { semitones:[0,1,3,4,6,7,9,10], degreeTokens:["1","b2","b3","3","b5","5","6","b7"], displayDegrees:["R","♭2","♭3","3","♭5","5","6","♭7"], defaultFlat:true },
+  "Ionian":           { semitones:[0,2,4,5,7,9,11],   degreeTokens:["1","2","3","4","5","6","7"],               displayDegrees:["R","2","3","4","5","6","7"] },
+  "Aeolian":          { semitones:[0,2,3,5,7,8,10],   degreeTokens:["1","2","b3","4","5","b6","b7"],            displayDegrees:["R","2","♭3","4","5","♭6","♭7"],       defaultFlat:true },
+};
+
+// ── 互換アクセサ ──
+// 既存コード(scalePcs, degreeLabel等)が SCALES[key].iv / .deg を参照するため、
+// SCALE_DEFS から自動生成して互換性を維持する
+const SCALES = {};
+for (const [k, d] of Object.entries(SCALE_DEFS)) {
+  SCALES[k] = { iv: d.semitones, deg: d.displayDegrees };
+  if (d.defaultFlat) SCALES[k].defaultFlat = true;
+}
+
+// SCALE_DEFS アクセサ関数（今後はこちらを使う）
+function getScaleDef(scaleKey) { return SCALE_DEFS[scaleKey] || null; }
+function getScaleSemitones(scaleKey) { return SCALE_DEFS[scaleKey]?.semitones || []; }
+function getScaleDisplayDegrees(scaleKey) { return SCALE_DEFS[scaleKey]?.displayDegrees || []; }
+function getScaleDegreeTokens(scaleKey) { return SCALE_DEFS[scaleKey]?.degreeTokens || []; }
+function getScaleDefaultFlat(scaleKey) { return SCALE_DEFS[scaleKey]?.defaultFlat || false; }
+const VIEW_MODES = ["全体","3NPS","BOX","CAGED"];
+// 全体ボタンを押すたびに循環する表示モード
+const DISPLAY_CYCLE = ["全体","R35","R37","ルート"];
+// R35/R37の表示フィルタ用度数セット
+const VIEW_HIGHLIGHT_DEGREES = {
+  "R35": ["R","3","♭3","5"],
+  "R37": ["R","3","♭3","7","♭7"],
+};
+const CAGED_LABELS = ["C","A","G","E","D"];
+const SCALE_CATEGORIES = [
+  { label: "Basic", scales: ["Major","Natural Minor","Major Pentatonic","Minor Pentatonic","Blues"] },
+  { label: "Modes", scales: ["Ionian","Dorian","Phrygian","Lydian","Mixolydian","Aeolian","Locrian"] },
+  { label: "Other", scales: ["Melodic Minor","Harmonic Minor","HMP5 below","Altered","Lydian ♭7","Whole Tone","Diminished","Combination of Diminished"] },
+];
+const ACCENT_COLORS = ["#e8874a","#4a90d9","#6ec87a","#c975d1","#d4a843"];
+
+// ── Utility ──
+function noteAt(si, fret) { return (TUNING[si] + fret) % 12; }
+function noteName(pc, flat) { return (flat ? NOTES_FLAT : NOTES_SHARP)[pc % 12]; }
+function interval(rootPc, notePc) { return ((notePc - rootPc) + 12) % 12; }
+function scalePcs(rootPc, scaleKey) {
+  const s = SCALES[scaleKey]; return s ? s.iv.map(iv => (rootPc + iv) % 12) : [];
+}
+function degreeLabel(rootPc, notePc, scaleKey) {
+  const s = SCALES[scaleKey]; if (!s) return "?";
+  const iv = interval(rootPc, notePc);
+  const idx = s.iv.indexOf(iv);
+  return idx >= 0 ? s.deg[idx] : "?";
+}
+
+// ============================================================
+// 理論綴りレイヤー（Phase 1）
+// ============================================================
+// 内部の音高計算(pitchClass)は維持し、表示用の正しい音名綴りを
+// rootSpelling + degreeToken から導出する。
+//
+// 例: buildSpelledScale("F#","Major") → F#,G#,A#,B,C#,D#,E#
+//     buildSpelledScale("G♭","Major") → G♭,A♭,B♭,C♭,D♭,E♭,F
+// ============================================================
+
+// ダイアトニック7音の文字名とそのnatural pitchClass
+const LETTERS = ["C","D","E","F","G","A","B"];
+const LETTER_PC = { C:0, D:2, E:4, F:5, G:7, A:9, B:11 };
+
+// 音名文字列を { letter, accidental, pc } に分解
+// 例: "D♭" → { letter:"D", accidental:"b", pc:1 }
+// 例: "F#" → { letter:"F", accidental:"#", pc:6 }
+// 例: "C"  → { letter:"C", accidental:"",  pc:0 }
+function parseNoteSpelling(noteStr) {
+  if (!noteStr || noteStr.length === 0) return null;
+  const letter = noteStr[0].toUpperCase();
+  const rest = noteStr.slice(1);
+  const basePC = LETTER_PC[letter];
+  if (basePC === undefined) return null;
+
+  let accidentalSemitones = 0;
+  let accidental = "";
+  for (const ch of rest) {
+    if (ch === "#" || ch === "♯") { accidentalSemitones += 1; accidental += "#"; }
+    else if (ch === "b" || ch === "♭") { accidentalSemitones -= 1; accidental += "b"; }
+  }
+  const pc = ((basePC + accidentalSemitones) % 12 + 12) % 12;
+  return { letter, accidental, pc };
+}
+
+// 文字名のインデックス (C=0, D=1, ..., B=6)
+function getLetterIndex(letter) {
+  return LETTERS.indexOf(letter.toUpperCase());
+}
+
+// degreeToken ("1","2","b3","#4","b7"等) から
+// ダイアトニックステップ数 (0-6) を返す
+// "1"→0, "2"→1, "b3"→2, "3"→2, "4"→3, "#4"→3, "b5"→4, "5"→4, etc.
+// compound: "b9"→1, "#9"→1, "#11"→3, "b13"→5
+function degreeTokenToStep(token) {
+  // 数字部分を取り出す
+  const numMatch = token.match(/\d+/);
+  if (!numMatch) return 0;
+  let num = parseInt(numMatch[0]);
+  // compound interval → simple に変換 (9→2, 11→4, 13→6)
+  if (num > 7) num = num - 7;
+  // 度数は1始まりなのでstep = num-1
+  return (num - 1) % 7;
+}
+
+// ルート文字名から指定ステップ数だけ上の文字名を返す
+// 例: rootLetter="D", step=2 → "F" (D→E→F)
+function letterAtStep(rootLetter, step) {
+  const rootIdx = getLetterIndex(rootLetter);
+  if (rootIdx < 0) return "C";
+  return LETTERS[(rootIdx + step) % 7];
+}
+
+// semitone差からaccidental文字列を生成
+// offset: 目標pcとその文字のnaturalPCの差 (-2..+2)
+// 例: -1→"♭", 0→"", +1→"#", -2→"♭♭", +2→"##"
+function buildAccidentalStr(offset) {
+  // -6以上は+方向に解釈、+6以上は-方向に解釈
+  const norm = ((offset + 6) % 12) - 6;
+  if (norm === 0) return "";
+  if (norm === 1) return "#";
+  if (norm === -1) return "♭";
+  if (norm === 2) return "##";
+  if (norm === -2) return "♭♭";
+  // それ以外はフォールバック
+  if (norm > 0) return "#".repeat(norm);
+  return "♭".repeat(-norm);
+}
+
+// ── 主役関数: buildSpelledScale ──
+// rootSpelling + scaleKey から理論的に正しい構成音配列を返す
+// SCALE_DEFS にdegreeTokensがあるスケールのみ対応、なければnull
+function buildSpelledScale(rootSpelling, scaleKey) {
+  const def = SCALE_DEFS[scaleKey];
+  if (!def || !def.degreeTokens) return null;
+
+  const parsed = parseNoteSpelling(rootSpelling);
+  if (!parsed) return null;
+
+  const { letter: rootLetter, pc: rootPc } = parsed;
+
+  return def.semitones.map((semi, i) => {
+    const targetPc = (rootPc + semi) % 12;
+    const token = def.degreeTokens[i];
+    const step = degreeTokenToStep(token);
+    const targetLetter = letterAtStep(rootLetter, step);
+    const naturalPc = LETTER_PC[targetLetter];
+    const offset = ((targetPc - naturalPc) + 12) % 12;
+    const normOffset = offset > 6 ? offset - 12 : offset;
+    const acc = buildAccidentalStr(normOffset);
+    return {
+      pc: targetPc,
+      spelledName: targetLetter + acc,
+      degreeToken: token,
+      displayDegree: def.displayDegrees[i],
+    };
+  });
+}
+
+// pc からスケール文脈に合った理論綴り音名を返す汎用関数
+// Fretboard・構成音欄共通で使う
+function getSpelledNameForPc(rootSpelling, scaleKey, pc, fallbackFlat) {
+  const map = buildSpelledScaleMap(rootSpelling, scaleKey);
+  if (map && map[pc] !== undefined) return map[pc];
+  return noteName(pc, fallbackFlat);
+}
+
+// buildSpelledScale の結果を pc → spelledName のマップに変換
+// Fretboard描画で毎音ごとにbuildSpelledScaleを呼ぶ無駄を解消するため、
+// useMemo等でこのマップをキャッシュして使う
+function buildSpelledScaleMap(rootSpelling, scaleKey) {
+  const spelled = buildSpelledScale(rootSpelling, scaleKey);
+  if (!spelled) return null;
+  const map = {};
+  for (const s of spelled) map[s.pc] = s.spelledName;
+  return map;
+}
+
+// スケール構成音名の配列を取得する統一関数
+// 構成音欄で使う。理論綴り対応スケールはbuildSpelledScale、非対応はfallback
+function getScaleNoteNames(rootSpelling, scaleKey, rootPc, fallbackFlat) {
+  const spelled = buildSpelledScale(rootSpelling, scaleKey);
+  if (spelled) return spelled.map(s => s.spelledName);
+  // fallback: pitchClassベース
+  const pcs = scalePcs(rootPc, scaleKey);
+  return pcs.map(pc => noteName(pc, fallbackFlat));
+}
+
+// rootPc + useFlat から rootSpelling を推定（既存データ互換・新規追加の初期値用のみ）
+// 注意: 既にrootSpellingが確定している場面ではこの関数で上書きしないこと
+function inferRootSpelling(rootPc, useFlat) {
+  return useFlat ? NOTES_FLAT[rootPc] : NOTES_SHARP[rootPc];
+}
+
+// rootSpelling が♭系かどうかを判定（useFlat の従属値として使う）
+function isSpellingFlat(spelling) {
+  if (!spelling) return false;
+  return spelling.includes("♭") || spelling.includes("b");
+}
+
+// ============================================================
+// スケールstate正規化（共通関数）
+// ============================================================
+// addScale / loadPreset / initScales / handleXxx で
+// root / rootSpelling / useFlat / scaleName の整合を統一する
+//
+// 方針:
+// - rootSpelling が既にあれば正とし、上書きしない
+// - rootSpelling が無い場合のみ inferRootSpelling で補完
+// - useFlat は rootSpelling から導出（従属値）
+// - defaultFlat は useFlat の初期提案にのみ使用
+function normalizeScaleEntry(entry) {
+  const root = entry.root ?? 0;
+  const scaleName = entry.scaleName ?? "Major";
+  // rootSpelling: あればそのまま。無ければ推定補完
+  const rootSpelling = entry.rootSpelling || inferRootSpelling(root, entry.useFlat ?? false);
+  // useFlat: rootSpellingから導出（rootSpellingが主）
+  const useFlat = isSpellingFlat(rootSpelling);
+  return {
+    ...entry,
+    root,
+    scaleName,
+    rootSpelling,
+    useFlat,
+  };
+}
+
+// ============================================================
+// 3NPS テンプレート移調システム
+// ============================================================
+// CAGEDと同じ設計思想:
+//   C major の手入力データを基準テンプレートとして保持し、
+//   他のルートへはフレット方向に移調して生成する。
+//   旧自動生成ロジックは廃止。
+//
+// 拡張方法:
+//   NPS_TEMPLATES に新しいスケールキーを追加するだけ。
+// ============================================================
+
+const NPS_TEMPLATES = {
+  "Major": {
+    baseRoot: 0, // C
+    positions: [
+      { label:"Pos 1", frets:{0:[8,10,12], 1:[8,10,12], 2:[9,10,12], 3:[9,10,12], 4:[10,12,13], 5:[10,12,13]}, lo:8, hi:13 },
+      { label:"Pos 2", frets:{0:[10,12,13], 1:[10,12,14], 2:[10,12,14], 3:[10,12,14], 4:[12,13,15], 5:[12,13,15]}, lo:10, hi:15 },
+      { label:"Pos 3", frets:{0:[0,1,3], 1:[0,2,3], 2:[0,2,3], 3:[0,2,4], 4:[1,3,5], 5:[1,3,5]}, lo:0, hi:5 },
+      { label:"Pos 4", frets:{0:[1,3,5], 1:[2,3,5], 2:[2,3,5], 3:[2,4,5], 4:[3,5,6], 5:[3,5,7]}, lo:1, hi:7 },
+      { label:"Pos 5", frets:{0:[3,5,7], 1:[3,5,7], 2:[3,5,7], 3:[4,5,7], 4:[5,6,8], 5:[5,7,8]}, lo:3, hi:8 },
+      { label:"Pos 6", frets:{0:[5,7,8], 1:[5,7,8], 2:[5,7,9], 3:[5,7,9], 4:[6,8,10], 5:[7,8,10]}, lo:5, hi:10 },
+      { label:"Pos 7", frets:{0:[7,8,10], 1:[7,8,10], 2:[7,9,10], 3:[7,9,10], 4:[8,10,12], 5:[8,10,12]}, lo:7, hi:12 },
+    ],
+  },
+  // 将来ここに追加:
+  "Natural Minor": {
+    baseRoot: 9, // A
+    positions: [
+      { label:"Pos 1", frets:{0:[5,7,8], 1:[5,7,8], 2:[5,7,9], 3:[5,7,9], 4:[6,8,10], 5:[7,8,10]}, lo:5, hi:10 },
+      { label:"Pos 2", frets:{0:[7,8,10], 1:[7,8,10], 2:[7,9,10], 3:[7,9,10], 4:[8,10,12], 5:[8,10,12]}, lo:7, hi:12 },
+      { label:"Pos 3", frets:{0:[8,10,12], 1:[8,10,12], 2:[9,10,12], 3:[9,10,12], 4:[10,12,13], 5:[10,12,13]}, lo:8, hi:13 },
+      { label:"Pos 4", frets:{0:[10,12,13], 1:[10,12,14], 2:[10,12,14], 3:[10,12,14], 4:[12,13,15], 5:[12,13,15]}, lo:10, hi:15 },
+      { label:"Pos 5", frets:{0:[12,13,15], 1:[12,14,15], 2:[12,14,15], 3:[12,14,16], 4:[13,15,17], 5:[13,15,17]}, lo:12, hi:17 },
+      { label:"Pos 6", frets:{0:[1,3,5], 1:[2,3,5], 2:[2,3,5], 3:[2,4,5], 4:[3,5,6], 5:[3,5,7]}, lo:1, hi:7 },
+      { label:"Pos 7", frets:{0:[3,5,7], 1:[3,5,7], 2:[3,5,7], 3:[4,5,7], 4:[5,6,8], 5:[5,7,8]}, lo:3, hi:8 },
+    ],
+  },
+  "Melodic Minor": {
+    baseRoot: 0, // C
+    positions: [
+      { label:"Pos 1", frets:{0:[8,10,11], 1:[8,10,12], 2:[9,10,12], 3:[8,10,12], 4:[10,12,13], 5:[10,11,13]}, lo:8, hi:13 },
+      { label:"Pos 2", frets:{0:[10,11,13], 1:[10,12,14], 2:[10,12,13], 3:[10,12,14], 4:[12,13,15], 5:[11,13,15]}, lo:10, hi:15 },
+      { label:"Pos 3", frets:{0:[11,13,15], 1:[12,14,15], 2:[12,13,15], 3:[12,14,16], 4:[13,15,16], 5:[13,15,17]}, lo:11, hi:17 },
+      { label:"Pos 4", frets:{0:[1,3,5], 1:[2,3,5], 2:[1,3,5], 3:[2,4,5], 4:[3,4,6], 5:[3,5,7]}, lo:1, hi:7 },
+      { label:"Pos 5", frets:{0:[3,5,7], 1:[3,5,6], 2:[3,5,7], 3:[4,5,7], 4:[4,6,8], 5:[5,7,8]}, lo:3, hi:8 },
+      { label:"Pos 6", frets:{0:[5,7,8], 1:[5,6,8], 2:[5,7,9], 3:[5,7,8], 4:[6,8,10], 5:[7,8,10]}, lo:5, hi:10 },
+      { label:"Pos 7", frets:{0:[7,8,10], 1:[6,8,10], 2:[7,9,10], 3:[7,8,10], 4:[8,10,12], 5:[8,10,11]}, lo:6, hi:12 },
+    ],
+  },
+  "Harmonic Minor": {
+    baseRoot: 0, // C
+    positions: [
+      { label:"Pos 1", frets:{0:[8,10,11], 1:[8,10,11], 2:[9,10,12], 3:[8,10,12], 4:[9,12,13], 5:[10,11,13]}, lo:8, hi:13 },
+      { label:"Pos 2", frets:{0:[10,11,13], 1:[10,11,14], 2:[10,12,13], 3:[10,12,13], 4:[12,13,15], 5:[11,13,15]}, lo:10, hi:15 },
+      { label:"Pos 3", frets:{0:[11,13,15], 1:[11,14,15], 2:[12,13,15], 3:[12,13,16], 4:[13,15,16], 5:[13,15,16]}, lo:11, hi:16 },
+      { label:"Pos 4", frets:{0:[1,3,4], 1:[2,3,5], 2:[1,3,5], 3:[1,4,5], 4:[3,4,6], 5:[3,4,7]}, lo:1, hi:7 },
+      { label:"Pos 5", frets:{0:[3,4,7], 1:[3,5,6], 2:[3,5,6], 3:[4,5,7], 4:[4,6,8], 5:[4,7,8]}, lo:3, hi:8 },
+      { label:"Pos 6", frets:{0:[4,7,8], 1:[5,6,8], 2:[5,6,9], 3:[5,7,8], 4:[6,8,9], 5:[7,8,10]}, lo:4, hi:10 },
+      { label:"Pos 7", frets:{0:[7,8,10], 1:[6,8,10], 2:[6,9,10], 3:[7,8,10], 4:[8,9,12], 5:[8,10,11]}, lo:6, hi:12 },
+    ],
+  },
+  "HMP5 below": {
+    baseRoot: 0, // C
+    positions: [
+      { label:"Pos 1", frets:{0:[8,9,12], 1:[8,10,11], 2:[8,10,11], 3:[9,10,12], 4:[9,11,13], 5:[9,12,13]}, lo:8, hi:13 },
+      { label:"Pos 2", frets:{0:[9,12,13], 1:[10,11,13], 2:[10,11,14], 3:[10,12,13], 4:[11,13,14], 5:[12,13,15]}, lo:9, hi:15 },
+      { label:"Pos 3", frets:{0:[12,13,15], 1:[11,13,15], 2:[11,14,15], 3:[12,13,15], 4:[13,14,17], 5:[13,15,16]}, lo:11, hi:17 },
+      { label:"Pos 4", frets:{0:[1,3,4], 1:[1,3,4], 2:[2,3,5], 3:[1,3,5], 4:[2,5,6], 5:[3,4,6]}, lo:1, hi:6 },
+      { label:"Pos 5", frets:{0:[3,4,6], 1:[3,4,7], 2:[3,5,6], 3:[3,5,6], 4:[5,6,8], 5:[4,6,8]}, lo:3, hi:8 },
+      { label:"Pos 6", frets:{0:[4,6,8], 1:[4,7,8], 2:[5,6,8], 3:[5,6,9], 4:[6,8,9], 5:[6,8,9]}, lo:4, hi:9 },
+      { label:"Pos 7", frets:{0:[6,8,9], 1:[7,8,10], 2:[6,8,10], 3:[6,9,10], 4:[8,9,11], 5:[8,9,12]}, lo:6, hi:12 },
+    ],
+  },
+  "Whole Tone": {
+    baseRoot: 0, // C
+    positions: [
+      { label:"Pos 1", frets:{0:[8,10,12], 1:[9,11,13], 2:[10,12,14], 3:[11,13,15], 4:[13,15,17], 5:[14,16,18]}, lo:8, hi:18 },
+      { label:"Pos 2", frets:{0:[10,12,14], 1:[11,13,15], 2:[12,14,16], 3:[13,15,17], 4:[15,17,19], 5:[16,18,20]}, lo:10, hi:20 },
+      { label:"Pos 3", frets:{0:[0,2,4], 1:[1,3,5], 2:[2,4,6], 3:[3,5,7], 4:[5,7,9], 5:[6,8,10]}, lo:0, hi:10 },
+      { label:"Pos 4", frets:{0:[2,4,6], 1:[3,5,7], 2:[4,6,8], 3:[5,7,9], 4:[7,9,11], 5:[8,10,12]}, lo:2, hi:12 },
+      { label:"Pos 5", frets:{0:[4,6,8], 1:[5,7,9], 2:[6,8,10], 3:[7,9,11], 4:[9,11,13], 5:[10,12,14]}, lo:4, hi:14 },
+      { label:"Pos 6", frets:{0:[6,8,10], 1:[7,9,11], 2:[8,10,12], 3:[9,11,13], 4:[11,13,15], 5:[12,14,16]}, lo:6, hi:16 },
+    ],
+  },
+  "Diminished": {
+    baseRoot: 0, // C
+    // パターンA→B交互、+3fずつ（減7の対称性）
+    positions: [
+      { label:"Pos 1", frets:{0:[8,10,11], 1:[8,9,11], 2:[7,9,10], 3:[7,8,10], 4:[7,9,10], 5:[7,8,10]}, lo:7, hi:11 },
+      { label:"Pos 2", frets:{0:[10,11,13], 1:[9,11,12], 2:[9,10,12], 3:[8,10,11], 4:[9,10,12], 5:[8,10,11]}, lo:8, hi:13 },
+      { label:"Pos 3", frets:{0:[11,13,14], 1:[11,12,14], 2:[10,12,13], 3:[10,11,13], 4:[10,12,13], 5:[10,11,13]}, lo:10, hi:14 },
+      { label:"Pos 4", frets:{0:[13,14,16], 1:[12,14,15], 2:[12,13,15], 3:[11,13,14], 4:[12,13,15], 5:[11,13,14]}, lo:11, hi:16 },
+      { label:"Pos 5", frets:{0:[2,4,5], 1:[2,3,5], 2:[1,3,4], 3:[1,2,4], 4:[1,3,4], 5:[1,2,4]}, lo:1, hi:5 },
+      { label:"Pos 6", frets:{0:[4,5,7], 1:[3,5,6], 2:[3,4,6], 3:[2,4,5], 4:[3,4,6], 5:[2,4,5]}, lo:2, hi:7 },
+      { label:"Pos 7", frets:{0:[5,7,8], 1:[5,6,8], 2:[4,6,7], 3:[4,5,7], 4:[4,6,7], 5:[4,5,7]}, lo:4, hi:8 },
+      { label:"Pos 8", frets:{0:[7,8,10], 1:[6,8,9], 2:[6,7,9], 3:[5,7,8], 4:[6,7,9], 5:[5,7,8]}, lo:5, hi:10 },
+    ],
+  },
+  // Combination of Diminished = Diminishedの逆パターン（B→A交互）
+  // DimiのPos 2,3,4,5,6,7,8,1 の順
+  "Combination of Diminished": {
+    baseRoot: 0, // C
+    positions: [
+      { label:"Pos 1", frets:{0:[10,11,13], 1:[9,11,12], 2:[9,10,12], 3:[8,10,11], 4:[9,10,12], 5:[8,10,11]}, lo:8, hi:13 },
+      { label:"Pos 2", frets:{0:[11,13,14], 1:[11,12,14], 2:[10,12,13], 3:[10,11,13], 4:[10,12,13], 5:[10,11,13]}, lo:10, hi:14 },
+      { label:"Pos 3", frets:{0:[13,14,16], 1:[12,14,15], 2:[12,13,15], 3:[11,13,14], 4:[12,13,15], 5:[11,13,14]}, lo:11, hi:16 },
+      { label:"Pos 4", frets:{0:[2,4,5], 1:[2,3,5], 2:[1,3,4], 3:[1,2,4], 4:[1,3,4], 5:[1,2,4]}, lo:1, hi:5 },
+      { label:"Pos 5", frets:{0:[4,5,7], 1:[3,5,6], 2:[3,4,6], 3:[2,4,5], 4:[3,4,6], 5:[2,4,5]}, lo:2, hi:7 },
+      { label:"Pos 6", frets:{0:[5,7,8], 1:[5,6,8], 2:[4,6,7], 3:[4,5,7], 4:[4,6,7], 5:[4,5,7]}, lo:4, hi:8 },
+      { label:"Pos 7", frets:{0:[7,8,10], 1:[6,8,9], 2:[6,7,9], 3:[5,7,8], 4:[6,7,9], 5:[5,7,8]}, lo:5, hi:10 },
+      { label:"Pos 8", frets:{0:[8,10,11], 1:[8,9,11], 2:[7,9,10], 3:[7,8,10], 4:[7,9,10], 5:[7,8,10]}, lo:7, hi:11 },
+    ],
+  },
+};
+// ============================================================
+// BOX テンプレート（独立管理）
+// ============================================================
+// BOX は 3NPS の考え方を参考にしたポジション体系だが、
+// 現実装では BOX_TEMPLATES として独立にテンプレートを管理している。
+// 3NPS から自動生成はしていない。
+//
+// BOX の特徴（3NPS との違い）:
+//   - 2弦が2音（3NPSでは3音）
+//   - 1弦の構成が異なる（2弦から移動した音が入る）
+//   - 6弦・5弦・4弦・3弦は3NPSと同じ
+//
+// 移調は transposeShape() を共用し、全キー対応。
+// ============================================================
+
+const BOX_TEMPLATES = {
+  "Major": {
+    baseRoot: 0, // C
+    positions: [
+      { label:"Pos 1", frets:{0:[8,10,12], 1:[8,10,12], 2:[9,10,12], 3:[9,10,12], 4:[10,12], 5:[8,10,12]}, lo:8, hi:12 },
+      { label:"Pos 2", frets:{0:[10,12,13], 1:[10,12,14], 2:[10,12,14], 3:[10,12,14], 4:[12,13], 5:[10,12,13]}, lo:10, hi:14 },
+      { label:"Pos 3", frets:{0:[0,1,3], 1:[0,2,3], 2:[0,2,3], 3:[0,2,4], 4:[1,3], 5:[0,1,3]}, lo:0, hi:4 },
+      { label:"Pos 4", frets:{0:[1,3,5], 1:[2,3,5], 2:[2,3,5], 3:[2,4,5], 4:[3,5], 5:[1,3,5]}, lo:1, hi:5 },
+      { label:"Pos 5", frets:{0:[3,5,7], 1:[3,5,7], 2:[3,5,7], 3:[4,5,7], 4:[5,6], 5:[3,5,7]}, lo:3, hi:7 },
+      { label:"Pos 6", frets:{0:[5,7,8], 1:[5,7,8], 2:[5,7,9], 3:[5,7,9], 4:[6,8], 5:[5,7,8]}, lo:5, hi:9 },
+      { label:"Pos 7", frets:{0:[7,8,10], 1:[7,8,10], 2:[7,9,10], 3:[7,9,10], 4:[8,10], 5:[7,8,10]}, lo:7, hi:10 },
+    ],
+  },
+  // 将来ここにスケールを追加
+  "Natural Minor": {
+    baseRoot: 9, // A
+    positions: [
+      { label:"Pos 1", frets:{0:[5,7,8], 1:[5,7,8], 2:[5,7,9], 3:[5,7,9], 4:[6,8], 5:[5,7,8]}, lo:5, hi:9 },
+      { label:"Pos 2", frets:{0:[7,8,10], 1:[7,8,10], 2:[7,9,10], 3:[7,9,10], 4:[8,10], 5:[7,8,10]}, lo:7, hi:10 },
+      { label:"Pos 3", frets:{0:[8,10,12], 1:[8,10,12], 2:[9,10,12], 3:[9,10,12], 4:[10,12], 5:[8,10,12]}, lo:8, hi:12 },
+      { label:"Pos 4", frets:{0:[10,12,13], 1:[10,12,14], 2:[10,12,14], 3:[10,12,14], 4:[12,13], 5:[10,12,13]}, lo:10, hi:14 },
+      { label:"Pos 5", frets:{0:[12,13,15], 1:[12,14,15], 2:[12,14,15], 3:[12,14,16], 4:[13,15], 5:[12,13,15]}, lo:12, hi:16 },
+      { label:"Pos 6", frets:{0:[1,3,5], 1:[2,3,5], 2:[2,3,5], 3:[2,4,5], 4:[3,5], 5:[1,3,5]}, lo:1, hi:5 },
+      { label:"Pos 7", frets:{0:[3,5,7], 1:[3,5,7], 2:[3,5,7], 3:[4,5,7], 4:[5,6], 5:[3,5,7]}, lo:3, hi:7 },
+    ],
+  },
+  "Melodic Minor": {
+    baseRoot: 0, // C
+    positions: [
+      { label:"Pos 1", frets:{0:[8,10,11], 1:[8,10,12], 2:[9,10,12], 3:[8,10,12], 4:[10,12], 5:[8,10,11]}, lo:8, hi:12 },
+      { label:"Pos 2", frets:{0:[10,11,13], 1:[10,12,14], 2:[10,12,13], 3:[10,12,14], 4:[12,13], 5:[10,11,13]}, lo:10, hi:14 },
+      { label:"Pos 3", frets:{0:[11,13,15], 1:[12,14,15], 2:[12,13,15], 3:[12,14,16], 4:[13,15], 5:[11,13,15]}, lo:11, hi:16 },
+      { label:"Pos 4", frets:{0:[1,3,5], 1:[2,3,5], 2:[1,3,5], 3:[2,4,5], 4:[3,4], 5:[1,3,5]}, lo:1, hi:5 },
+      { label:"Pos 5", frets:{0:[3,5,7], 1:[3,5,6], 2:[3,5,7], 3:[4,5,7], 4:[4,6], 5:[3,5,7]}, lo:3, hi:7 },
+      { label:"Pos 6", frets:{0:[5,7,8], 1:[5,6,8], 2:[5,7,9], 3:[5,7,8], 4:[6,8], 5:[5,7,8]}, lo:5, hi:9 },
+      { label:"Pos 7", frets:{0:[7,8,10], 1:[6,8,10], 2:[7,9,10], 3:[7,8,10], 4:[8,10], 5:[7,8,10]}, lo:6, hi:10 },
+    ],
+  },
+  "Harmonic Minor": {
+    baseRoot: 0, // C
+    positions: [
+      { label:"Pos 1", frets:{0:[8,10,11], 1:[8,10,11], 2:[9,10,12], 3:[8,10,12], 4:[9,12], 5:[8,10,11]}, lo:8, hi:12 },
+      { label:"Pos 2", frets:{0:[10,11,13], 1:[10,11,14], 2:[10,12,13], 3:[10,12,13], 4:[12,13], 5:[10,11,13]}, lo:10, hi:14 },
+      { label:"Pos 3", frets:{0:[11,13,15], 1:[11,14,15], 2:[12,13,15], 3:[12,13,16], 4:[13,15], 5:[11,13,15]}, lo:11, hi:16 },
+      { label:"Pos 4", frets:{0:[1,3,4], 1:[2,3,5], 2:[1,3,5], 3:[1,4,5], 4:[3,4], 5:[1,3,4]}, lo:1, hi:5 },
+      { label:"Pos 5", frets:{0:[3,4,7], 1:[3,5,6], 2:[3,5,6], 3:[4,5,7], 4:[4,6], 5:[3,4,7]}, lo:3, hi:7 },
+      { label:"Pos 6", frets:{0:[4,7,8], 1:[5,6,8], 2:[5,6,9], 3:[5,7,8], 4:[6,8], 5:[4,7,8]}, lo:4, hi:9 },
+      { label:"Pos 7", frets:{0:[7,8,10], 1:[6,8,10], 2:[6,9,10], 3:[7,8,10], 4:[8,9], 5:[7,8,10]}, lo:6, hi:10 },
+    ],
+  },
+  "HMP5 below": {
+    baseRoot: 0, // C
+    positions: [
+      { label:"Pos 1", frets:{0:[8,9,12], 1:[8,10,11], 2:[8,10,11], 3:[9,10,12], 4:[9,11], 5:[8,9,12]}, lo:8, hi:12 },
+      { label:"Pos 2", frets:{0:[9,12,13], 1:[10,11,13], 2:[10,11,14], 3:[10,12,13], 4:[11,13], 5:[9,12,13]}, lo:9, hi:14 },
+      { label:"Pos 3", frets:{0:[12,13,15], 1:[11,13,15], 2:[11,14,15], 3:[12,13,15], 4:[13,14], 5:[12,13,15]}, lo:11, hi:15 },
+      { label:"Pos 4", frets:{0:[1,3,4], 1:[1,3,4], 2:[2,3,5], 3:[1,3,5], 4:[2,5], 5:[1,3,4]}, lo:1, hi:5 },
+      { label:"Pos 5", frets:{0:[3,4,6], 1:[3,4,7], 2:[3,5,6], 3:[3,5,6], 4:[5,6], 5:[3,4,6]}, lo:3, hi:7 },
+      { label:"Pos 6", frets:{0:[4,6,8], 1:[4,7,8], 2:[5,6,8], 3:[5,6,9], 4:[6,8], 5:[4,6,8]}, lo:4, hi:9 },
+      { label:"Pos 7", frets:{0:[6,8,9], 1:[7,8,10], 2:[6,8,10], 3:[6,9,10], 4:[8,9], 5:[6,8,9]}, lo:6, hi:10 },
+    ],
+  },
+  "Whole Tone": {
+    baseRoot: 0, // C
+    // パターンA(3,2,3,2,2,3)とパターンB(2,3,2,3,3,2)が交互、+2fずつ
+    positions: [
+      { label:"Pos 1", frets:{0:[8,10,12], 1:[9,11], 2:[8,10,12], 3:[9,11], 4:[9,11], 5:[8,10,12]}, lo:8, hi:12 },
+      { label:"Pos 2", frets:{0:[10,12], 1:[9,11,13], 2:[10,12], 3:[9,11,13], 4:[9,11,13], 5:[10,12]}, lo:9, hi:13 },
+      { label:"Pos 3", frets:{0:[0,2,4], 1:[1,3], 2:[0,2,4], 3:[1,3], 4:[1,3], 5:[0,2,4]}, lo:0, hi:4 },
+      { label:"Pos 4", frets:{0:[2,4], 1:[1,3,5], 2:[2,4], 3:[1,3,5], 4:[1,3,5], 5:[2,4]}, lo:1, hi:5 },
+      { label:"Pos 5", frets:{0:[4,6,8], 1:[5,7], 2:[4,6,8], 3:[5,7], 4:[5,7], 5:[4,6,8]}, lo:4, hi:8 },
+      { label:"Pos 6", frets:{0:[6,8], 1:[5,7,9], 2:[6,8], 3:[5,7,9], 4:[5,7,9], 5:[6,8]}, lo:5, hi:9 },
+    ],
+  },
+};
+// ── BOX Generator（独立テンプレート移調型） ──
+// BOX_TEMPLATES から直接テンプレートを取得し移調する。
+// transposeShape() は 3NPS / CAGED と共用。
+// posRotate でモード対応（3NPSと同じ回転ルール）。
+function generateBOX(rootPc, scaleKey, numFrets = DEFAULT_NUM_FRETS) {
+  const { template: tplKey, baseRootOverride, posRotate } = resolveScale(scaleKey);
+  const template = BOX_TEMPLATES[tplKey];
+  if (!template) return [];
+
+  const baseRoot = baseRootOverride ?? template.baseRoot;
+  const shift = ((rootPc - baseRoot) + 12) % 12;
+  const positions = template.positions;
+  const len = positions.length;
+
+  // posRotateが必要な場合（モード対応）
+  const rotated = [];
+  for (let i = 0; i < len; i++) {
+    rotated.push(positions[(i + posRotate) % len]);
+  }
+
+  return rotated.map((pos, i) =>
+    ({ ...transposeShape(pos, shift, numFrets), label: `Pos ${i + 1}` })
+  );
+}
+
+// ── スケール名エイリアス & モード解決 ──
+// posRotate: 3NPSのポジション配列を何個回転させるか
+// shapeRotate: CAGEDのshape配列を何個回転させラベルを振り直すか
+//   ルート位置が変わるとshape名(C,A,G,E,D)の対応がずれるため
+const CAGED_LABEL_ORDER = ["C","A","G","E","D"];
+
+const SCALE_RESOLVE_MAP = {
+  "Major":         { template: "Major", baseRootOverride: null, posRotate: 0, shapeRotate: 0 },
+  "Natural Minor": { template: "Natural Minor", baseRootOverride: null, posRotate: 0, shapeRotate: 0 },
+  "Minor Pentatonic": { template: "Minor Pentatonic", baseRootOverride: null, posRotate: 0, shapeRotate: 0 },
+  "Major Pentatonic": { template: "Major Pentatonic", baseRootOverride: null, posRotate: 0, shapeRotate: 0 },
+  "Blues":          { template: "Blues", baseRootOverride: null, posRotate: 0, shapeRotate: 0 },
+  // モード: Majorテンプレートの baseRoot 違い + posRotate で3NPS/BOX対応
+  // shapeRotate は CAGED用だが、現在モード系はCAGED非対応(CAGED_ALLOWED_SCALESに含まれない)
+  // 将来CAGED対応する場合に備えて検証済みの値を保持
+  "Ionian":     { template: "Major", baseRootOverride: 0,  posRotate: 0, shapeRotate: 0 },  // C,A,G,E,D
+  "Dorian":     { template: "Major", baseRootOverride: 2,  posRotate: 1, shapeRotate: 4 },  // D,C,A,G,E
+  "Phrygian":   { template: "Major", baseRootOverride: 4,  posRotate: 2, shapeRotate: 3 },  // E,D,C,A,G
+  "Lydian":     { template: "Major", baseRootOverride: 5,  posRotate: 3, shapeRotate: 3 },  // E,D,C,A,G
+  "Mixolydian": { template: "Major", baseRootOverride: 7,  posRotate: 4, shapeRotate: 2 },  // G,E,D,C,A
+  "Aeolian":    { template: "Major", baseRootOverride: 9,  posRotate: 5, shapeRotate: 1 },  // A,G,E,D,C
+  "Locrian":    { template: "Major", baseRootOverride: 11, posRotate: 6, shapeRotate: 0 },  // C,A,G,E,D
+  // Melodic Minor派生モード
+  // Altered = Melodic Minorの7度始まり（B Altered = C Melodic Minor）
+  // baseRoot=11(B) → B AlteredがC Melodic Minorと同配置、他キーはshiftでずらすだけ
+  "Altered":    { template: "Melodic Minor", baseRootOverride: 11, posRotate: 6, shapeRotate: 0 },
+  // Lydian ♭7 = Melodic Minorの4度始まり（C Lydian ♭7 = F Melodic Minorの4度）
+  // baseRoot=5(F), posRotate=3
+  "Lydian ♭7":  { template: "Melodic Minor", baseRootOverride: 5, posRotate: 3, shapeRotate: 0 },
+};
+
+function resolveScale(scaleKey) {
+  const entry = SCALE_RESOLVE_MAP[scaleKey];
+  if (entry) return entry;
+  return { template: scaleKey, baseRootOverride: null, posRotate: 0, shapeRotate: 0 };
+}
+
+// ── 3NPS Generator（テンプレート移調型） ──
+// transposeShape() はCAGEDと共用
+// posRotate でモードに合わせてポジション順を回転し、ラベルを振り直す
+function generate3NPS(rootPc, scaleKey, numFrets = DEFAULT_NUM_FRETS) {
+  const { template: tplKey, baseRootOverride, posRotate } = resolveScale(scaleKey);
+  const template = NPS_TEMPLATES[tplKey];
+  if (!template) return [];
+
+  const baseRoot = baseRootOverride ?? template.baseRoot;
+  const shift = ((rootPc - baseRoot) + 12) % 12;
+  const positions = template.positions;
+  const len = positions.length;
+
+  // posRotate分だけ配列を回転（Pos2始まり→Pos2,3,4,5,6,7,1の順）
+  const rotated = [];
+  for (let i = 0; i < len; i++) {
+    rotated.push(positions[(i + posRotate) % len]);
+  }
+
+  // 移調してラベルを振り直す
+  return rotated.map((pos, i) =>
+    ({ ...transposeShape(pos, shift, numFrets), label: `Pos ${i + 1}` })
+  );
+}
+
+// ============================================================
+// CAGED テンプレート移調システム
+// ============================================================
+//
+// 設計思想:
+//   CAGED の各 shape は「正しい形」が決まっている。
+//   C major の手入力データを基準テンプレートとして保持し、
+//   他のルートへはフレット方向に移調（shift）して生成する。
+//   root近辺のスケール音を拾う旧方式は廃止。
+//
+// 拡張方法:
+//   将来 Natural Minor や Pentatonic を追加する場合は
+//   CAGED_TEMPLATES に新しいキーを追加するだけでよい。
+// ============================================================
+
+// ── テンプレート定義 ──
+// baseRoot: このテンプレートの基準ルート（pitchClass）
+// shapes: 5つのshapeデータ（frets のキーは弦index: 0=6弦, 5=1弦）
+const CAGED_TEMPLATES = {
+  "Major": {
+    baseRoot: 0, // C
+    shapes: [
+      { label:"C", frets:{0:[0,1,3], 1:[0,2,3], 2:[0,2,3], 3:[0,2], 4:[0,1,3], 5:[0,1,3]}, lo:0, hi:3 },
+      { label:"A", frets:{0:[1,3,5], 1:[2,3,5], 2:[2,3,5], 3:[2,4,5], 4:[3,5,6], 5:[3,5]}, lo:1, hi:6 },
+      { label:"G", frets:{0:[5,7,8], 1:[5,7,8], 2:[5,7], 3:[4,5,7], 4:[5,6,8], 5:[5,7,8]}, lo:4, hi:8 },
+      { label:"E", frets:{0:[7,8,10], 1:[7,8,10], 2:[7,9,10], 3:[7,9,10], 4:[8,10], 5:[7,8,10]}, lo:7, hi:10 },
+      { label:"D", frets:{0:[10,12,13], 1:[10,12], 2:[9,10,12], 3:[9,10,12], 4:[10,12,13], 5:[10,12,13]}, lo:9, hi:13 },
+    ],
+  },
+  // Natural Minor (A基準) の CAGED shape は Major と同じ指板配置だが、
+  // ルートがAなのでshape名がずれる。
+  // Major C→MinorではA, Major A→G, Major G→E, Major E→D, Major D→C
+  "Natural Minor": {
+    baseRoot: 9, // A
+    shapes: [
+      { label:"A", frets:{0:[0,1,3], 1:[0,2,3], 2:[0,2,3], 3:[0,2], 4:[0,1,3], 5:[0,1,3]}, lo:0, hi:3 },
+      { label:"G", frets:{0:[1,3,5], 1:[2,3,5], 2:[2,3,5], 3:[2,4,5], 4:[3,5,6], 5:[3,5]}, lo:1, hi:6 },
+      { label:"E", frets:{0:[5,7,8], 1:[5,7,8], 2:[5,7], 3:[4,5,7], 4:[5,6,8], 5:[5,7,8]}, lo:4, hi:8 },
+      { label:"D", frets:{0:[7,8,10], 1:[7,8,10], 2:[7,9,10], 3:[7,9,10], 4:[8,10], 5:[7,8,10]}, lo:7, hi:10 },
+      { label:"C", frets:{0:[10,12,13], 1:[10,12], 2:[9,10,12], 3:[9,10,12], 4:[10,12,13], 5:[10,12,13]}, lo:9, hi:13 },
+    ],
+  },
+  // Minor Pentatonic (A基準) も同様にラベル修正
+  "Minor Pentatonic": {
+    baseRoot: 9, // A
+    shapes: [
+      { label:"A", frets:{0:[0,3], 1:[0,3], 2:[0,2], 3:[0,2], 4:[1,3], 5:[0,3]}, lo:0, hi:3 },
+      { label:"G", frets:{0:[3,5], 1:[3,5], 2:[2,5], 3:[2,5], 4:[3,5], 5:[3,5]}, lo:2, hi:5 },
+      { label:"E", frets:{0:[5,8], 1:[5,7], 2:[5,7], 3:[5,7], 4:[5,8], 5:[5,8]}, lo:5, hi:8 },
+      { label:"D", frets:{0:[8,10], 1:[7,10], 2:[7,10], 3:[7,9], 4:[8,10], 5:[8,10]}, lo:7, hi:10 },
+      { label:"C", frets:{0:[10,12], 1:[10,12], 2:[10,12], 3:[9,12], 4:[10,13], 5:[10,12]}, lo:9, hi:13 },
+    ],
+  },
+  "Major Pentatonic": {
+    baseRoot: 0, // C
+    shapes: [
+      { label:"C", frets:{0:[0,3], 1:[0,3], 2:[0,2], 3:[0,2], 4:[1,3], 5:[0,3]}, lo:0, hi:3 },
+      { label:"A", frets:{0:[3,5], 1:[3,5], 2:[2,5], 3:[2,5], 4:[3,5], 5:[3,5]}, lo:2, hi:5 },
+      { label:"G", frets:{0:[5,8], 1:[5,7], 2:[5,7], 3:[5,7], 4:[5,8], 5:[5,8]}, lo:5, hi:8 },
+      { label:"E", frets:{0:[8,10], 1:[7,10], 2:[7,10], 3:[7,9], 4:[8,10], 5:[8,10]}, lo:7, hi:10 },
+      { label:"D", frets:{0:[10,12], 1:[10,12], 2:[10,12], 3:[9,12], 4:[10,13], 5:[10,12]}, lo:9, hi:13 },
+    ],
+  },
+  // Blues (A基準) も同様にラベル修正
+  "Blues": {
+    baseRoot: 9, // A
+    shapes: [
+      { label:"A", frets:{0:[0,3], 1:[0,3], 2:[0,1,2], 3:[0,2], 4:[1,3,4], 5:[0,3]}, lo:0, hi:4 },
+      { label:"G", frets:{0:[3,5], 1:[3,5,6], 2:[2,5], 3:[2,5], 4:[3,4,5], 5:[3,5]}, lo:2, hi:6 },
+      { label:"E", frets:{0:[5,8], 1:[5,6,7], 2:[5,7], 3:[5,7,8], 4:[5,8], 5:[5,8]}, lo:5, hi:8 },
+      { label:"D", frets:{0:[8,10,11], 1:[7,10], 2:[7,10], 3:[7,8,9], 4:[8,10], 5:[8,10]}, lo:7, hi:11 },
+      { label:"C", frets:{0:[10,11,12], 1:[10,12], 2:[10,12,13], 3:[9,12], 4:[10,13], 5:[10,11,12]}, lo:9, hi:13 },
+    ],
+  },
+};
+
+// ── shape1個を移調する関数 ──
+// shape: { label, frets:{0:[...], ...5:[...]}, lo, hi }
+// shift: フレット方向のずらし量（正=高フレット方向）
+// numFrets: 指板の最大フレット数
+//
+// ルール:
+//   - 各フレットは f + shift のみ（±12の個別追加はしない）
+//   - shape内の相対構造は絶対に壊さない
+//   - shift候補を3つ（baseShift / baseShift-12 / baseShift+12）比較し、
+//     0〜numFrets に最も自然に収まるものを選ぶ
+//   - 低ポジション寄りを優先する
+function transposeShape(shape, shift, numFrets) {
+  // 候補shiftを3つ用意し、最も自然な位置のものを選ぶ
+  const candidates = [shift, shift - 12, shift + 12];
+  let bestShift = shift;
+  let bestScore = -Infinity;
+
+  for (const s of candidates) {
+    const lo = shape.lo + s;
+    const hi = shape.hi + s;
+    // 全体が範囲内に収まるか
+    if (lo < 0 || hi > numFrets) continue;
+    // スコア: 指板の中央付近を好み、極端に高い/低いを避ける
+    // center = shapeの中心位置、指板中央(numFrets/2)との距離が小さいほど高スコア
+    // 同点なら低い方を優先（- lo * 0.1 で微調整）
+    const center = (lo + hi) / 2;
+    const distFromMid = Math.abs(center - numFrets / 2);
+    const score = numFrets - distFromMid - lo * 0.1;
+    if (score > bestScore) {
+      bestScore = score;
+      bestShift = s;
+    }
+  }
+
+  // どの候補も完全に収まらなかった場合、元のshiftで部分的に表示
+  if (bestScore === -Infinity) bestShift = shift;
+
+  const newFrets = {};
+  let newLo = numFrets, newHi = 0;
+
+  for (let si = 0; si < NUM_STRINGS; si++) {
+    const original = shape.frets[si] || [];
+    const shifted = original
+      .map(f => f + bestShift)
+      .filter(f => f >= 0 && f <= numFrets);
+    newFrets[si] = shifted;
+
+    for (const f of shifted) {
+      if (f < newLo) newLo = f;
+      if (f > newHi) newHi = f;
+    }
+  }
+
+  if (newLo > newHi) { newLo = 0; newHi = 0; }
+
+  return {
+    label: shape.label,
+    frets: newFrets,
+    lo: newLo,
+    hi: newHi,
+  };
+}
+
+// ── CAGED Generator（テンプレート移調型） ──
+// CAGED は shape名(C,A,G,E,D) の正確性が重要なため、
+// 厳密に検証済みのスケールのみ表示する。
+// モード系(Ionian/Dorian等)やMelodic Minor派生はCAGED非対応とし、
+// 誤ったフォーム名を出すリスクを回避する。
+const CAGED_ALLOWED_SCALES = ["Major","Natural Minor","Minor Pentatonic","Major Pentatonic","Blues"];
+
+function generateCAGED(rootPc, scaleKey, numFrets = DEFAULT_NUM_FRETS) {
+  // CAGED対応スケールのみ許可、それ以外は空配列（ボタン非表示になる）
+  if (!CAGED_ALLOWED_SCALES.includes(scaleKey)) return [];
+
+  const { template: tplKey, baseRootOverride, shapeRotate } = resolveScale(scaleKey);
+  const template = CAGED_TEMPLATES[tplKey];
+  if (!template) return [];
+
+  const baseRoot = baseRootOverride ?? template.baseRoot;
+  const shift = ((rootPc - baseRoot) + 12) % 12;
+  const shapes = template.shapes;
+  const len = shapes.length;
+
+  return shapes.map((shape, i) => {
+    const transposed = transposeShape(shape, shift, numFrets);
+    const labelIdx = (i + shapeRotate) % len;
+    const newLabel = CAGED_LABEL_ORDER[labelIdx] ?? shape.label;
+    return { ...transposed, label: newLabel };
+  });
+}
+
+function getPositionsForMode(viewMode, p3, pC, pB) {
+  if (viewMode === "3NPS") return p3;
+  if (viewMode === "BOX") return pB;
+  if (viewMode === "CAGED") return pC;
+  return [];
+}
+
+// ── Self Tests ──
+// shape の構造妥当性を検証するヘルパー
+function validateShape(shape, label) {
+  const errors = [];
+  if (!shape) { errors.push(`${label}: shape is null`); return errors; }
+  for (let si = 0; si < NUM_STRINGS; si++) {
+    if (!Array.isArray(shape.frets[si])) errors.push(`${label}: frets[${si}] is not array`);
+  }
+  if (typeof shape.lo !== "number" || typeof shape.hi !== "number") errors.push(`${label}: lo/hi not number`);
+  if (shape.lo > shape.hi) errors.push(`${label}: lo(${shape.lo}) > hi(${shape.hi})`);
+  return errors;
+}
+
+// shape内の全音がスケールに属しているか＋rootが含まれているかを検証
+function validateShapeNotes(shape, rootPc, scaleKey, label) {
+  const errors = [];
+  if (!shape) return errors;
+  const pcs = scalePcs(rootPc, scaleKey);
+  if (pcs.length === 0) return errors;
+  let hasRoot = false;
+  for (let si = 0; si < NUM_STRINGS; si++) {
+    const arr = shape.frets[si] || [];
+    for (const f of arr) {
+      const pc = noteAt(si, f);
+      if (!pcs.includes(pc)) errors.push(`${label}: str${si} f${f} pc=${pc} not in scale`);
+      if (pc === rootPc) hasRoot = true;
+    }
+  }
+  if (!hasRoot) errors.push(`${label}: root(${rootPc}) not found in shape`);
+  return errors;
+}
+
+function runSelfTests() {
+  const e = [];
+  // 基本音名テスト
+  if (noteAt(0,0) !== 4) e.push("6弦 open ≠ E");
+  if (noteAt(0,5) !== 9) e.push("6弦 F5 ≠ A");
+  if (noteAt(1,0) !== 9) e.push("5弦 open ≠ A");
+  if (noteAt(1,3) !== 0) e.push("5弦 F3 ≠ C");
+  if (noteAt(5,0) !== 4) e.push("1弦 open ≠ E");
+  if (interval(0,7) !== 7) e.push("C→G ≠ 7");
+  if (interval(9,0) !== 3) e.push("A→C ≠ 3");
+  if (JSON.stringify(scalePcs(0,"Major")) !== JSON.stringify([0,2,4,5,7,9,11])) e.push("C Major pcs");
+  if (degreeLabel(0,4,"Major") !== "3") e.push("C Major deg E ≠ 3");
+  if (degreeLabel(9,0,"Natural Minor") !== "♭3") e.push("Am deg C ≠ ♭3");
+
+  // 構造 + 理論検証を共通で行うヘルパー
+  const testGenerated = (shapes, rootPc, scaleKey, system) => {
+    shapes.forEach((s, i) => {
+      const lbl = `${system} ${scaleKey} ${s.label ?? i}`;
+      e.push(...validateShape(s, lbl));
+      e.push(...validateShapeNotes(s, rootPc, scaleKey, lbl));
+    });
+  };
+
+  // C Major: 3NPS / CAGED / BOX
+  const p3 = generate3NPS(0, "Major");
+  if (p3.length === 0) e.push("3NPS C Major empty");
+  testGenerated(p3, 0, "Major", "3NPS");
+  const pC = generateCAGED(0, "Major");
+  if (pC.length !== 5) e.push("CAGED C Major count ≠ 5");
+  testGenerated(pC, 0, "Major", "CAGED");
+  const pB = generateBOX(0, "Major");
+  if (pB.length === 0) e.push("BOX C Major empty");
+  testGenerated(pB, 0, "Major", "BOX");
+
+  // A Natural Minor: 3NPS / CAGED / BOX
+  const p3m = generate3NPS(9, "Natural Minor");
+  if (p3m.length === 0) e.push("3NPS A NatMin empty");
+  testGenerated(p3m, 9, "Natural Minor", "3NPS");
+  const pCm = generateCAGED(9, "Natural Minor");
+  if (pCm.length !== 5) e.push("CAGED A NatMin count ≠ 5");
+  testGenerated(pCm, 9, "Natural Minor", "CAGED");
+  const pBm = generateBOX(9, "Natural Minor");
+  if (pBm.length === 0) e.push("BOX A NatMin empty");
+  testGenerated(pBm, 9, "Natural Minor", "BOX");
+
+  // 移調テスト: D Major
+  const p3d = generate3NPS(2, "Major");
+  if (p3d.length === 0) e.push("3NPS D Major empty");
+  testGenerated(p3d, 2, "Major", "3NPS");
+  const pCd = generateCAGED(2, "Major");
+  if (pCd.length !== 5) e.push("CAGED D Major count ≠ 5");
+  testGenerated(pCd, 2, "Major", "CAGED");
+
+  // ── 理論綴りレイヤーテスト ──
+  const spellTest = (rootSpelling, scaleKey, expected, label) => {
+    const result = buildSpelledScale(rootSpelling, scaleKey);
+    if (!result) { e.push(`${label}: buildSpelledScale returned null`); return; }
+    const names = result.map(s => s.spelledName).join(",");
+    if (names !== expected) e.push(`${label}: got ${names}, expected ${expected}`);
+  };
+  // Major
+  spellTest("C", "Major", "C,D,E,F,G,A,B", "Spell C Major");
+  spellTest("F#", "Major", "F#,G#,A#,B,C#,D#,E#", "Spell F# Major");
+  spellTest("G♭", "Major", "G♭,A♭,B♭,C♭,D♭,E♭,F", "Spell G♭ Major");
+  spellTest("D", "Major", "D,E,F#,G,A,B,C#", "Spell D Major");
+  spellTest("B♭", "Major", "B♭,C,D,E♭,F,G,A", "Spell B♭ Major");
+  spellTest("E♭", "Major", "E♭,F,G,A♭,B♭,C,D", "Spell E♭ Major");
+  spellTest("A♭", "Major", "A♭,B♭,C,D♭,E♭,F,G", "Spell A♭ Major");
+  // Natural Minor
+  spellTest("A", "Natural Minor", "A,B,C,D,E,F,G", "Spell A NatMin");
+  spellTest("E♭", "Natural Minor", "E♭,F,G♭,A♭,B♭,C♭,D♭", "Spell E♭ NatMin");
+  spellTest("F#", "Natural Minor", "F#,G#,A,B,C#,D,E", "Spell F# NatMin");
+  spellTest("C", "Natural Minor", "C,D,E♭,F,G,A♭,B♭", "Spell C NatMin");
+  // 追加テスト: モードとその他スケール
+  spellTest("D", "Dorian", "D,E,F,G,A,B,C", "Spell D Dorian");
+  spellTest("E", "Phrygian", "E,F,G,A,B,C,D", "Spell E Phrygian");
+  spellTest("A", "Minor Pentatonic", "A,C,D,E,G", "Spell A MinPenta");
+  spellTest("A", "Blues", "A,C,D,E♭,E,G", "Spell A Blues");
+  spellTest("C", "Melodic Minor", "C,D,E♭,F,G,A,B", "Spell C MelMin");
+  spellTest("C", "Harmonic Minor", "C,D,E♭,F,G,A♭,B", "Spell C HarMin");
+  // Altered: compound interval (b9,#9,#11,b13) の綴り検証
+  spellTest("C", "Altered", "C,D♭,D#,E,F#,A♭,B♭", "Spell C Altered");
+  // Diminished: 8音で同文字名の重複がないか
+  spellTest("C", "Diminished", "C,D,E♭,F,G♭,A♭,A,B", "Spell C Dimi");
+  spellTest("C", "Combination of Diminished", "C,D♭,E♭,E,G♭,G,A,B♭", "Spell C ComDimi");
+  // Whole Tone
+  spellTest("C", "Whole Tone", "C,D,E,F#,G#,B♭", "Spell C WholeTone");
+  // Lydian b7
+  spellTest("C", "Lydian ♭7", "C,D,E,F#,G,A,B♭", "Spell C Lyd♭7");
+  // HMP5 below
+  spellTest("C", "HMP5 below", "C,D♭,E,F,G,A♭,B♭", "Spell C HMP5b");
+  // Blues ♭5確認: F Blues
+  spellTest("F", "Blues", "F,A♭,B♭,C♭,C,E♭", "Spell F Blues");
+
+  // ── rootSpelling 補完テスト ──
+  if (inferRootSpelling(1, true) !== "D♭") e.push("inferRootSpelling(1,true) ≠ D♭");
+  if (inferRootSpelling(1, false) !== "C#") e.push("inferRootSpelling(1,false) ≠ C#");
+  if (inferRootSpelling(6, true) !== "G♭") e.push("inferRootSpelling(6,true) ≠ G♭");
+  if (inferRootSpelling(6, false) !== "F#") e.push("inferRootSpelling(6,false) ≠ F#");
+
+  // ── getSpelledNameForPc テスト ──
+  // F# Major の pc=5 は E#（noteName だと F になるが理論綴りでは E#）
+  if (getSpelledNameForPc("F#", "Major", 5, false) !== "E#") e.push("getSpelledNameForPc F# Maj pc5 ≠ E#");
+  // G♭ Major の pc=11 は C♭
+  if (getSpelledNameForPc("G♭", "Major", 11, true) !== "C♭") e.push("getSpelledNameForPc G♭ Maj pc11 ≠ C♭");
+  // fallback: 未知スケールでは noteName に落ちる
+  if (getSpelledNameForPc("C", "UnknownScale", 0, false) !== "C") e.push("getSpelledNameForPc fallback ≠ C");
+
+  // ── SCALE_DEFS 統合テスト: SCALESとの整合確認 ──
+  const majS = SCALES["Major"];
+  const majD = SCALE_DEFS["Major"];
+  if (JSON.stringify(majS.iv) !== JSON.stringify(majD.semitones)) e.push("SCALES/SCALE_DEFS Major iv mismatch");
+  if (JSON.stringify(majS.deg) !== JSON.stringify(majD.displayDegrees)) e.push("SCALES/SCALE_DEFS Major deg mismatch");
+
+  return e;
+}
+
+// ── Storage ──
+// version を持たせて将来の互換性を確保
+const STORAGE_KEY = "guitar-scale-viewer";
+const STORAGE_VERSION = 2; // v1.4対応
+
+function loadState() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if (!raw) return null;
+    // version未対応の古いデータでも scales があれば使う
+    if (raw.version === STORAGE_VERSION) return raw;
+    // 旧形式: version無しでもscalesがあればマイグレーション
+    if (raw.scales && Array.isArray(raw.scales)) return { ...raw, version: STORAGE_VERSION };
+    return null;
+  } catch { return null; }
+}
+
+// 旧キーからのマイグレーション（初回のみ）
+(function migrateOldStorage() {
+  try {
+    const oldKey = "guitar-scale-viewer-v1";
+    const oldData = localStorage.getItem(oldKey);
+    if (oldData && !localStorage.getItem(STORAGE_KEY)) {
+      const parsed = JSON.parse(oldData);
+      if (parsed?.scales) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...parsed, version: STORAGE_VERSION }));
+      }
+      localStorage.removeItem(oldKey);
+    }
+  } catch {}
+})();
+
+function saveState(s) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...s, version: STORAGE_VERSION })); } catch {}
+}
+
+// ── プリセット保存/読み込み ──
+const PRESET_KEY = "guitar-scale-presets";
+const PRESET_VERSION = 1;
+
+function loadPresets() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PRESET_KEY));
+    if (!raw) return [];
+    // 旧形式: version無しの配列 → そのまま使える
+    if (Array.isArray(raw)) return raw;
+    // 新形式: { version, presets }
+    if (raw.version && Array.isArray(raw.presets)) return raw.presets;
+    return [];
+  } catch { return []; }
+}
+
+function savePresets(presets) {
+  try {
+    localStorage.setItem(PRESET_KEY, JSON.stringify({ version: PRESET_VERSION, presets }));
+  } catch {}
+}
+
+// ── Theme ──
+const TH = {
+  bg:"#0c0c0c", card:"#161616", border:"#252525", surface:"#1e1e1e",
+  text:"#ddd", dim:"#777",
+  gold:"#d4a843", goldDim:"#a07830", goldBright:"#f0c050",
+  scaleName:"#eee",
+  rootName:"#e8874a",
+  rootBg:"#e8874a", rootFg:"#fff", rootStroke:"#f0a060", dotBg:"rgba(74,144,217,0.85)", dotFg:"#fff",
+  ghostBg:"rgba(255,255,255,0.06)", ghostFg:"rgba(255,255,255,0.18)",
+  btnBg:"#242424", btnFg:"#ccc", btnActiveBg:"#d4a843", btnActiveFg:"#1a1a00",
+  fretWire:"#3a3a3a", string:"#4a4a4a", nut:"#777",
+  posHighlight:"rgba(212,168,67,0.07)", posStroke:"rgba(212,168,67,0.20)",
+  popupBg:"#1c1c1c", popupBorder:"#3a3a3a",
+  overlay:"rgba(0,0,0,0.55)",
+};
+
+// ── SVG Fretboard ──
+const FRET_W_NORMAL = 52, FRET_W_COMPACT = 44;
+const STRING_GAP = 30, PAD_LEFT = 38, PAD_TOP = 44, PAD_BOTTOM = 56;
+
+function Fretboard({ rootPc, scaleKey, showMode, viewMode, activeFrets, positionRange, useFlat, compact, neighborFrets, rootSpelling }) {
+  const FRET_W = compact ? FRET_W_COMPACT : FRET_W_NORMAL;
+  const numFrets = DEFAULT_NUM_FRETS;
+  const svgW = PAD_LEFT + (numFrets+1)*FRET_W + 8;
+  const svgH = PAD_TOP + 5*STRING_GAP + PAD_BOTTOM;
+  const pcs = useMemo(() => scalePcs(rootPc, scaleKey), [rootPc, scaleKey]);
+
+  // 理論綴りマップをキャッシュ（毎音ごとのbuildSpelledScale呼び出しを回避）
+  const spelledMap = useMemo(() => buildSpelledScaleMap(rootSpelling, scaleKey), [rootSpelling, scaleKey]);
+  const getNoteLabel = useCallback((pc) => {
+    if (spelledMap && spelledMap[pc] !== undefined) return spelledMap[pc];
+    return noteName(pc, useFlat);
+  }, [spelledMap, useFlat]);
+
+  // viewMode="ルート"時はrootPcの音だけ表示
+  const shouldShow = useCallback((si, f) => {
+    const pc = noteAt(si, f);
+    if (!pcs.includes(pc)) return false;
+    if (viewMode === "ルート") return pc === rootPc;
+    return true;
+  }, [pcs, viewMode, rootPc]);
+
+  // R35/R37のハイライト判定: 対象度数かどうか
+  const highlightDegs = VIEW_HIGHLIGHT_DEGREES[viewMode] || null;
+  const isHighlighted = useCallback((si, f) => {
+    if (!highlightDegs) return false;
+    const pc = noteAt(si, f);
+    const deg = degreeLabel(rootPc, pc, scaleKey);
+    return highlightDegs.includes(deg);
+  }, [highlightDegs, rootPc, scaleKey]);
+
+  const isActive = useCallback((si, f) => {
+    if (!pcs.includes(noteAt(si, f))) return false;
+    if (viewMode === "全体" || viewMode === "R35" || viewMode === "R37" || viewMode === "ルート") return true;
+    return activeFrets?.[si]?.includes(f) ?? false;
+  }, [pcs, viewMode, activeFrets]);
+
+  // つながり判定: neighborFretsに含まれるか
+  const isNeighbor = useCallback((si, f) => {
+    if (!neighborFrets) return false;
+    return neighborFrets[si]?.includes(f) ?? false;
+  }, [neighborFrets]);
+
+  const stringY = si => PAD_TOP + (NUM_STRINGS-1-si)*STRING_GAP;
+  const fretX = f => PAD_LEFT + f*FRET_W + FRET_W/2;
+  const els = [];
+
+  if (viewMode !== "全体" && positionRange) {
+    // lo〜hiフレットの範囲をハイライト
+    // lo=0（開放弦含む）の場合はナット位置から開始
+    const nutX = PAD_LEFT + FRET_W;
+    const x1 = positionRange.lo === 0
+      ? nutX - 6  // ナットの少し左から
+      : PAD_LEFT + positionRange.lo * FRET_W + 4;
+    const x2 = PAD_LEFT + (positionRange.hi + 1) * FRET_W - 4;
+    els.push(<rect key="posHL" x={x1} y={PAD_TOP-14} width={x2-x1} height={(NUM_STRINGS-1)*STRING_GAP+28} rx={8} fill={TH.posHighlight} stroke={TH.posStroke} strokeWidth={1.2} />);
+  }
+  for (const m of FRET_MARKERS) {
+    if (m > numFrets) continue;
+    const x = PAD_LEFT+m*FRET_W+FRET_W/2, my = PAD_TOP+5*STRING_GAP+22;
+    const myTop = PAD_TOP-22; // 上側マーカーのy位置
+    if (DOUBLE_MARKERS.includes(m)) {
+      els.push(<rect key={`dm${m}bg`} x={PAD_LEFT+m*FRET_W+2} y={PAD_TOP-6} width={FRET_W-4} height={(NUM_STRINGS-1)*STRING_GAP+12} rx={4} fill="rgba(255,255,255,0.03)" />);
+      // 下側
+      els.push(<circle key={`dm${m}a`} cx={x-7} cy={my} r={3.5} fill={TH.gold} opacity={0.5} />);
+      els.push(<circle key={`dm${m}b`} cx={x+7} cy={my} r={3.5} fill={TH.gold} opacity={0.5} />);
+      // 上側
+      els.push(<circle key={`dm${m}ta`} cx={x-7} cy={myTop} r={3.5} fill={TH.gold} opacity={0.5} />);
+      els.push(<circle key={`dm${m}tb`} cx={x+7} cy={myTop} r={3.5} fill={TH.gold} opacity={0.5} />);
+    } else {
+      els.push(<circle key={`dm${m}`} cx={x} cy={my} r={3.5} fill="#999" opacity={0.6} />);
+      els.push(<circle key={`dm${m}t`} cx={x} cy={myTop} r={3.5} fill="#999" opacity={0.6} />);
+    }
+  }
+  for (let f = 1; f <= numFrets; f++) {
+    const is12 = DOUBLE_MARKERS.includes(f);
+    // 下側フレット番号
+    els.push(<text key={`fn${f}`} x={PAD_LEFT+f*FRET_W+FRET_W/2} y={PAD_TOP+5*STRING_GAP+44} textAnchor="middle" fill={is12 ? TH.gold : "#aaa"} fontSize={is12 ? "14" : "13"} fontFamily="sans-serif" fontWeight={is12 ? "700" : "600"}>{f}</text>);
+    // 上側フレット番号（マーカー位置のみ、スクロール中の位置把握用）
+    if (FRET_MARKERS.includes(f)) {
+      els.push(<text key={`fnt${f}`} x={PAD_LEFT+f*FRET_W+FRET_W/2} y={PAD_TOP-30} textAnchor="middle" fill={is12 ? TH.gold : "#666"} fontSize={is12 ? "12" : "11"} fontFamily="sans-serif" fontWeight={is12 ? "700" : "500"}>{f}</text>);
+    }
+  }
+  els.push(<line key="nut" x1={PAD_LEFT+FRET_W} y1={PAD_TOP} x2={PAD_LEFT+FRET_W} y2={PAD_TOP+5*STRING_GAP} stroke={TH.nut} strokeWidth={3.5} />);
+  for (let f = 2; f <= numFrets+1; f++) {
+    const x = PAD_LEFT+f*FRET_W;
+    const is12 = (f === 13);
+    els.push(<line key={`fw${f}`} x1={x} y1={PAD_TOP} x2={x} y2={PAD_TOP+5*STRING_GAP} stroke={is12 ? "#555" : TH.fretWire} strokeWidth={is12 ? 1.5 : 1} />);
+  }
+  for (let si = 0; si < NUM_STRINGS; si++) {
+    const y = stringY(si), sw = 0.8+(NUM_STRINGS-1-si)*0.22;
+    els.push(<line key={`s${si}`} x1={PAD_LEFT+FRET_W-1} y1={y} x2={PAD_LEFT+(numFrets+1)*FRET_W} y2={y} stroke={TH.string} strokeWidth={sw} opacity={0.55} />);
+    els.push(<text key={`sl${si}`} x={PAD_LEFT-6} y={y+5} textAnchor="end" fill="#aaa" fontSize="13" fontFamily="sans-serif" fontWeight="600">{TUNING_NAMES[si]}</text>);
+  }
+  const dotScale = compact ? 0.95 : 1;
+  for (let si = 0; si < NUM_STRINGS; si++) {
+    for (let f = 0; f <= numFrets; f++) {
+      const pc = noteAt(si,f); if (!pcs.includes(pc)) continue;
+      // viewMode="ルート"時はrootPcだけ表示
+      if (!shouldShow(si, f)) continue;
+      const act = isActive(si,f), isR = pc===rootPc;
+      const neighbor = !act && isNeighbor(si, f);
+      // viewMode="ルート"時はラベル"R"、音名時は理論綴りを使用
+      const lb = viewMode==="ルート" ? "R"
+        : showMode==="音名" ? getNoteLabel(pc)
+        : degreeLabel(rootPc,pc,scaleKey);
+      const cx = fretX(f), cy = stringY(si);
+      const long = lb.length > 2;
+      // R35/R37: 全体表示 + ハイライト音に外枠
+      const hl = isHighlighted(si, f);
+      if (viewMode !== "全体" && viewMode !== "R35" && viewMode !== "R37" && viewMode !== "ルート" && !act) {
+        if (neighbor) {
+          // つながり表示: 前後ポジションの音をはっきり目立つゴールド半透明で表示
+          const nR = 11 * dotScale;
+          const nIsR = pc === rootPc;
+          els.push(<g key={`n${si}_${f}`}>
+            <circle cx={cx} cy={cy} r={nR} fill={nIsR ? "rgba(232,135,74,0.25)" : "rgba(212,168,67,0.18)"} stroke={nIsR ? "rgba(232,135,74,0.50)" : "rgba(212,168,67,0.40)"} strokeWidth={1.2} />
+            <text x={cx} y={cy+3.5*dotScale} textAnchor="middle" fontSize={compact?(long?"9":"11"):(long?"10":"12")} fill={nIsR ? "rgba(232,135,74,0.75)" : "rgba(212,168,67,0.65)"} fontFamily="sans-serif" fontWeight="700">{lb}</text>
+          </g>);
+        } else {
+          // 通常のghost
+          els.push(<g key={`n${si}_${f}`}><circle cx={cx} cy={cy} r={10*dotScale} fill={TH.ghostBg} /><text x={cx} y={cy+3.5*dotScale} textAnchor="middle" fontSize={compact?(long?"9":"10"):(long?"9":"11")} fill={TH.ghostFg} fontFamily="sans-serif" fontWeight="600">{lb}</text></g>);
+        }
+      } else {
+        const r = (isR?14:12)*dotScale, bg = isR?TH.rootBg:TH.dotBg, fg = isR?TH.rootFg:TH.dotFg;
+        const fs = compact ? (isR?(long?"11":"13"):(long?"10":"12")) : (isR?(long?"12":"15"):(long?"11":"14"));
+        // R35/R37時: ハイライト音に度数別の外枠色
+        let hlColor = null;
+        if (hl && !isR) {
+          const deg = degreeLabel(rootPc, pc, scaleKey);
+          if (deg === "3" || deg === "♭3") hlColor = "#e85a8a"; // ピンク: 3度
+          else hlColor = "#e8d44a"; // 黄: 5度/7度
+        }
+        const hlStroke = hlColor ? hlColor : (isR ? TH.rootStroke : "none");
+        const hlStrokeW = hl ? 2.5 : (isR ? 1.5 : 0);
+        els.push(<g key={`n${si}_${f}`}>
+          {isR && <circle cx={cx} cy={cy} r={r+3*dotScale} fill={TH.rootBg} opacity={0.25} />}
+          {hlColor && <circle cx={cx} cy={cy} r={r+3*dotScale} fill={hlColor} opacity={0.15} />}
+          <circle cx={cx} cy={cy} r={r} fill={bg} stroke={hlStroke} strokeWidth={hlStrokeW} />
+          <text x={cx} y={cy+4*dotScale} textAnchor="middle" fontSize={fs} fill={fg} fontFamily="sans-serif" fontWeight={isR?"800":"700"} style={{pointerEvents:"none"}}>{lb}</text>
+        </g>);
+      }
+    }
+  }
+  const scrollRef = useRef(null);
+  useEffect(() => {
+    if (!scrollRef.current || !positionRange) return;
+    const container = scrollRef.current;
+    const FRET_W = compact ? 44 : 52;
+    const containerW = container.clientWidth;
+    // ハイライト描画と同じ左端基準を使う
+    const nutX = PAD_LEFT + FRET_W;
+    const posLeftPx = positionRange.lo === 0
+      ? nutX - 6  // ハイライトと同じナット寄り開始
+      : PAD_LEFT + positionRange.lo * FRET_W + 4;
+    const posRightPx = PAD_LEFT + (positionRange.hi + 1) * FRET_W - 4;
+    const posWidthPx = posRightPx - posLeftPx;
+
+    if (posWidthPx <= containerW) {
+      const svgTotalW = PAD_LEFT + (numFrets + 1) * FRET_W + 8;
+      const maxScroll = svgTotalW - containerW;
+      const idealLeft = posLeftPx - 20;
+      const targetX = Math.max(0, Math.min(idealLeft, maxScroll));
+      container.scrollTo({ left: targetX, behavior: "smooth" });
+    } else {
+      const targetX = posLeftPx - 20;
+      container.scrollTo({ left: Math.max(0, targetX), behavior: "smooth" });
+    }
+  }, [positionRange, compact]);
+
+  return (<div ref={scrollRef} className="sv-hide-scrollbar" style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+    <svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`} style={{display:"block",minWidth:svgW}}>{els}</svg>
+  </div>);
+}
+
+// ── UI Atoms ──
+function Btn({ active, children, onClick, style }) {
+  return <button onClick={onClick} style={{
+    border:"none", cursor:"pointer", fontFamily:"inherit", outline:"none",
+    fontWeight:600, fontSize:"15px", borderRadius:"8px", padding:"10px 16px",
+    transition:"all 0.12s",
+    background: active?TH.btnActiveBg:TH.btnBg, color: active?TH.btnActiveFg:TH.btnFg,
+    boxShadow: active?`0 0 10px ${TH.goldDim}55`:"none", ...style,
+  }}>{children}</button>;
+}
+function Card({ children, style }) {
+  return <div style={{ background:TH.card, border:`1px solid ${TH.border}`, borderRadius:"12px", padding:"14px 16px", marginBottom:"10px", ...style }}>{children}</div>;
+}
+
+// ── Popup (inline — カード内で開く) ──
+function Popup({ anchorRef, open, onClose, children }) {
+  const popRef = useRef(null);
+  const [above, setAbove] = useState(false);
+  const [leftOffset, setLeftOffset] = useState(0); // 左右はみ出し補正
+
+  // 上下判定 + 左右はみ出し補正
+  const recalcPosition = useCallback(() => {
+    if (!anchorRef.current) return;
+    const rect = anchorRef.current.getBoundingClientRect();
+    setAbove(window.innerHeight - rect.bottom < 340);
+
+    // 左右補正: popup幅を見てviewportからはみ出す分をずらす
+    if (popRef.current) {
+      const popRect = popRef.current.getBoundingClientRect();
+      const vw = window.innerWidth;
+      if (popRect.right > vw - 8) {
+        // 右にはみ出し → 左にずらす
+        setLeftOffset(-(popRect.right - vw + 8));
+      } else if (popRect.left < 8) {
+        // 左にはみ出し → 右にずらす
+        setLeftOffset(8 - popRect.left);
+      } else {
+        setLeftOffset(0);
+      }
+    }
+  }, [anchorRef]);
+
+  // クリック外で閉じる
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (popRef.current && !popRef.current.contains(e.target) &&
+          anchorRef.current && !anchorRef.current.contains(e.target)) {
+        onClose();
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    document.addEventListener("touchstart", handler);
+    return () => { document.removeEventListener("mousedown", handler); document.removeEventListener("touchstart", handler); };
+  }, [open, onClose, anchorRef]);
+
+  // open中は resize / scroll で位置を再計算
+  useEffect(() => {
+    if (!open) return;
+    // 初回は少し遅延して計算（popup描画後にサイズを取得するため）
+    const t = setTimeout(recalcPosition, 10);
+    window.addEventListener("resize", recalcPosition);
+    window.addEventListener("scroll", recalcPosition, true);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("resize", recalcPosition);
+      window.removeEventListener("scroll", recalcPosition, true);
+    };
+  }, [open, recalcPosition]);
+
+  if (!open) return null;
+  const posStyle = above
+    ? { position:"absolute", bottom:"100%", left:leftOffset, marginBottom:"4px" }
+    : { position:"absolute", top:"100%", left:leftOffset, marginTop:"4px" };
+  return (
+    <div ref={popRef} style={{
+      ...posStyle, zIndex:100,
+      background:"#1a1a1a", border:`1.5px solid ${TH.goldDim}`,
+      borderRadius:"12px", padding:"14px", boxShadow:"0 8px 32px rgba(0,0,0,0.8), 0 0 0 1px rgba(160,120,48,0.15)",
+      minWidth:"280px", maxHeight:"400px", overflowY:"auto",
+    }}>
+      {children}
+    </div>
+  );
+}
+
+// ── Modal Overlay (追加ポップアップ用) ──
+function Modal({ open, onClose, children }) {
+  if (!open) return null;
+  return (
+    <div onClick={onClose} style={{
+      position:"fixed", inset:0, zIndex:200,
+      background:TH.overlay, display:"flex", alignItems:"center", justifyContent:"center",
+      padding:"12px",
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background:TH.popupBg, border:`1px solid ${TH.popupBorder}`,
+        borderRadius:"14px", padding:"16px", boxShadow:"0 12px 48px rgba(0,0,0,0.7)",
+        width:"100%", maxWidth:"380px", maxHeight:"95vh", overflowY:"auto",
+      }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ── Root Picker (共通) ──
+// 異名同音(enharmonic)のpitchClass: ♯名と♭名の両方がある音
+const ENHARMONIC_PCS = new Set([1, 3, 6, 8, 10]);
+
+function RootPicker({ currentRoot, useFlat, onSelect, onToggleFlat }) {
+  const displayNotes = useFlat ? NOTES_FLAT : NOTES_SHARP;
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"8px" }}>
+        <span style={{ fontSize:"14px", color:TH.dim, fontWeight:600 }}>ルート選択</span>
+        <div style={{ display:"flex", borderRadius:"6px", overflow:"hidden", border:`1px solid ${TH.border}` }}>
+          <button onClick={(e) => { e.stopPropagation(); onToggleFlat(false); }} style={{
+            border:"none", cursor:"pointer", fontFamily:"inherit", outline:"none",
+            fontSize:"15px", fontWeight:700, padding:"6px 14px", transition:"all 0.12s",
+            background: !useFlat ? TH.gold : TH.surface, color: !useFlat ? TH.btnActiveFg : TH.dim,
+          }}>♯</button>
+          <button onClick={(e) => { e.stopPropagation(); onToggleFlat(true); }} style={{
+            border:"none", cursor:"pointer", fontFamily:"inherit", outline:"none",
+            fontSize:"15px", fontWeight:700, padding:"6px 14px", transition:"all 0.12s",
+            background: useFlat ? TH.gold : TH.surface, color: useFlat ? TH.btnActiveFg : TH.dim,
+          }}>♭</button>
+        </div>
+      </div>
+      <div style={{ display:"flex", flexWrap:"wrap", gap:"5px" }}>
+        {displayNotes.map((n, i) => {
+          const isEnharmonic = ENHARMONIC_PCS.has(i);
+          const selected = currentRoot === i;
+          // 異名同音は両方の名前を小さく表示
+          const sharpName = NOTES_SHARP[i];
+          const flatName = NOTES_FLAT[i];
+          return (
+            <button key={i} onClick={(e) => { e.stopPropagation(); onSelect(i); }} style={{
+              border:"none", cursor:"pointer", fontFamily:"inherit", outline:"none",
+              fontWeight:600, fontSize: isEnharmonic ? "13px" : "15px", borderRadius:"8px",
+              padding: isEnharmonic ? "4px 0" : "9px 0",
+              transition:"all 0.12s", width:"52px", textAlign:"center",
+              background: selected ? TH.rootBg : TH.btnBg,
+              color: selected ? TH.rootFg : TH.btnFg,
+              boxShadow: selected ? `0 0 8px ${TH.rootBg}55` : "none",
+              lineHeight: isEnharmonic ? "1.2" : "1",
+            }}>
+              {isEnharmonic ? (
+                <span style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:"1px" }}>
+                  <span style={{ opacity: !useFlat ? 1 : 0.5, fontSize:"13px" }}>{sharpName}</span>
+                  <span style={{ opacity: useFlat ? 1 : 0.5, fontSize:"13px" }}>{flatName}</span>
+                </span>
+              ) : n}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Scale Picker (共通) ──
+function ScalePicker({ currentScale, onSelect }) {
+  const [activeCat, setActiveCat] = useState(0);
+  const cat = SCALE_CATEGORIES[activeCat];
+  return (
+    <div>
+      <div style={{ display:"flex", gap:"5px", marginBottom:"10px" }}>
+        {SCALE_CATEGORIES.map((c, i) => (
+          <button key={c.label} onClick={(e) => { e.stopPropagation(); setActiveCat(i); }} style={{
+            border:"none", cursor:"pointer", fontFamily:"inherit", outline:"none",
+            fontWeight: activeCat===i ? 700 : 500,
+            fontSize:"14px", borderRadius:"6px", padding:"8px 14px",
+            transition:"all 0.12s", flex:"1 1 0",
+            background: activeCat===i ? TH.btnActiveBg : TH.btnBg,
+            color: activeCat===i ? TH.btnActiveFg : TH.btnFg,
+          }}>{c.label}</button>
+        ))}
+      </div>
+      <div style={{ border:`1px solid ${TH.goldDim}`, borderRadius:"10px", padding:"8px" }}>
+        <div style={{ display:"flex", flexDirection:"column", gap:"3px" }}>
+          {cat.scales.map(name => (
+            <button key={name} onClick={(e) => { e.stopPropagation(); onSelect(name); }} style={{
+              border:"none", cursor:"pointer", fontFamily:"inherit", outline:"none",
+              fontWeight: currentScale===name ? 700 : 500,
+              fontSize:"15px", borderRadius:"6px", padding:"9px 12px",
+              transition:"all 0.12s", textAlign:"left",
+              background: currentScale===name ? TH.btnActiveBg : TH.btnBg,
+              color: currentScale===name ? TH.btnActiveFg : TH.btnFg,
+            }}>{name}</button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Add Scale Modal ──
+// rootSpelling が主役。useFlat は rootSpelling から導出
+function AddScaleModal({ open, onClose, onAdd, modalRoot, modalSpelling, onRootChange, onFlatToggle }) {
+  const modalFlat = isSpellingFlat(modalSpelling);
+  const handleScaleSelect = (scaleName) => {
+    onAdd({ root: modalRoot, scaleName, rootSpelling: modalSpelling });
+    onClose();
+  };
+
+  return (
+    <Modal open={open} onClose={onClose}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"10px" }}>
+        <span style={{ fontSize:"16px", fontWeight:700, color:TH.gold }}>スケールを追加</span>
+        <button onClick={onClose} style={{
+          border:"none", cursor:"pointer", background:"none",
+          color:TH.dim, fontSize:"20px", fontWeight:700, lineHeight:1, padding:"2px 6px",
+        }}>×</button>
+      </div>
+
+      <RootPicker currentRoot={modalRoot} useFlat={modalFlat} onSelect={onRootChange} onToggleFlat={onFlatToggle} />
+
+      <div style={{ marginTop:"6px", marginBottom:"4px", fontSize:"12px", color:TH.dim, fontWeight:600 }}>
+        ルート: <span style={{ color:TH.rootName, fontWeight:700, fontSize:"14px" }}>{modalSpelling}</span>
+        　— スケールをタップで追加
+      </div>
+
+      <ScalePicker currentScale="" onSelect={handleScaleSelect} />
+    </Modal>
+  );
+}
+
+
+// ── Metronome ──
+function Metronome() {
+  const [bpm, setBpm] = useState(120);
+  const [playing, setPlaying] = useState(false);
+  const [beat, setBeat] = useState(false);
+  const [editingBpm, setEditingBpm] = useState(false);
+  // 練習タイマー: playing中の経過時間を計測
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const [totalPracticeSec, setTotalPracticeSec] = useState(0); // 累計
+  const practiceTimerRef = useRef(null);
+  const timerRef = useRef(null);
+  const beatTimeoutRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const prevPlayingRef = useRef(false);
+
+  // 練習タイマー: playing中に毎秒カウント
+  useEffect(() => {
+    if (playing) {
+      practiceTimerRef.current = setInterval(() => setElapsedSec(s => s + 1), 1000);
+    } else {
+      clearInterval(practiceTimerRef.current);
+      if (elapsedSec > 0) {
+        setTotalPracticeSec(t => t + elapsedSec);
+        setElapsedSec(0);
+      }
+    }
+    return () => clearInterval(practiceTimerRef.current);
+  }, [playing]);
+
+  const formatTime = (sec) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return m > 0 ? `${m}分${s.toString().padStart(2,"0")}秒` : `${s}秒`;
+  };
+
+  const playClick = useCallback(async () => {
+    if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = audioCtxRef.current;
+    // suspended状態ならresumeを待ってから発音（モバイル対応）
+    if (ctx.state === "suspended") {
+      try { await ctx.resume(); } catch {}
+    }
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    osc.type = "sine";
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.08);
+    setBeat(true);
+    // 前回のtimeoutをクリアしてから新規セット
+    if (beatTimeoutRef.current) clearTimeout(beatTimeoutRef.current);
+    beatTimeoutRef.current = setTimeout(() => setBeat(false), 80);
+  }, []);
+
+  // playing/bpm変更時の処理
+  // - playing がfalse→trueになった瞬間だけ即1発鳴らす
+  // - BPM変更時はintervalの張り直しのみ（即クリックしない）
+  useEffect(() => {
+    clearInterval(timerRef.current);
+    if (playing) {
+      const justStarted = !prevPlayingRef.current;
+      if (justStarted) playClick(); // 開始時のみ即1発
+      timerRef.current = setInterval(playClick, 60000 / bpm);
+    }
+    prevPlayingRef.current = playing;
+    return () => clearInterval(timerRef.current);
+  }, [playing, bpm, playClick]);
+
+  // アンマウント時にtimeoutも掃除
+  useEffect(() => {
+    return () => { if (beatTimeoutRef.current) clearTimeout(beatTimeoutRef.current); };
+  }, []);
+
+  const btnStyle = {
+    border:"none", cursor:"pointer", fontFamily:"inherit", outline:"none",
+    fontWeight:700, borderRadius:"6px", transition:"all 0.12s",
+  };
+
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => { if (playing) setExpanded(true); }, [playing]);
+
+  if (!expanded) {
+    return (
+      <div onClick={() => setExpanded(true)} style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:"8px", padding:"6px 8px", cursor:"pointer" }}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style={{flexShrink:0}}>
+          <path d="M12 2L6 20h12L12 2z" stroke={TH.dim} strokeWidth="1.8" fill="none" />
+          <line x1="5" y1="20" x2="19" y2="20" stroke={TH.dim} strokeWidth="2" strokeLinecap="round" />
+        </svg>
+        <span style={{ fontSize:"13px", color:TH.dim, fontWeight:600 }}>メトロノーム</span>
+        <span style={{ fontSize:"13px", color:TH.text, fontWeight:700 }}>{bpm} BPM</span>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"4px", padding:"2px 4px 0" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:"6px" }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L6 20h12L12 2z" stroke={beat ? TH.rootBg : TH.dim} strokeWidth="1.8" fill="none" />
+            <line x1="12" y1="18" x2={beat ? "16" : "8"} y2="6" stroke={beat ? TH.rootBg : TH.gold} strokeWidth="2" strokeLinecap="round" style={{transition:"all 0.1s"}} />
+            <line x1="5" y1="20" x2="19" y2="20" stroke={beat ? TH.rootBg : TH.dim} strokeWidth="2" strokeLinecap="round" />
+          </svg>
+          <span style={{ fontSize:"13px", color:TH.dim, fontWeight:600 }}>メトロノーム</span>
+        </div>
+        {!playing && <button onClick={() => setExpanded(false)} style={{
+          border:"none", cursor:"pointer", fontFamily:"inherit", outline:"none",
+          fontSize:"11px", fontWeight:600, padding:"3px 8px", borderRadius:"5px",
+          background:TH.btnBg, color:TH.dim, transition:"all 0.12s",
+        }}>閉じる</button>}
+      </div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:"8px", padding:"2px 6px 4px", flexWrap:"wrap" }}>
+        <button onClick={() => setPlaying(!playing)} style={{
+          ...btnStyle, fontSize:"16px", padding:"8px 18px",
+          background: playing ? TH.rootBg : TH.btnBg,
+          color: playing ? TH.rootFg : TH.btnFg,
+        }}>{playing ? "■ Stop" : "▶ Start"}</button>
+        <div style={{ display:"flex", alignItems:"center", gap:"4px" }}>
+          <button onClick={() => setBpm(b => Math.max(40, b - 5))} style={{ ...btnStyle, fontSize:"15px", padding:"8px 14px", background:TH.btnBg, color:TH.btnFg }}>-5</button>
+          {/* BPM数値: タップで直接入力モードに切り替え */}
+          {editingBpm ? (
+            <input
+              type="number" min="40" max="240" autoFocus
+              defaultValue={bpm}
+              onBlur={(e) => {
+                const v = Math.max(40, Math.min(240, parseInt(e.target.value) || 120));
+                setBpm(v);
+                setEditingBpm(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.target.blur();
+              }}
+              style={{
+                width:"64px", textAlign:"center", fontSize:"22px", fontWeight:700,
+                color:TH.text, background:TH.surface, border:`1.5px solid ${TH.gold}`,
+                borderRadius:"6px", outline:"none", fontFamily:"inherit", padding:"2px 0",
+              }}
+            />
+          ) : (
+            <span className="sv-tappable" onClick={() => setEditingBpm(true)} style={{
+              fontSize:"22px", fontWeight:700, color: beat ? TH.rootBg : TH.text,
+              minWidth:"64px", textAlign:"center", transition:"color 0.05s",
+              cursor:"pointer", borderRadius:"6px", padding:"2px 4px",
+              border:`1.5px solid ${TH.border}`, background:TH.btnBg,
+            }}>{bpm}</span>
+          )}
+          <button onClick={() => setBpm(b => Math.min(240, b + 5))} style={{ ...btnStyle, fontSize:"15px", padding:"8px 14px", background:TH.btnBg, color:TH.btnFg }}>+5</button>
+        </div>
+        <div style={{ width:"8px", height:"8px", borderRadius:"50%", background: beat ? TH.rootBg : TH.border, transition:"background 0.05s" }} />
+      </div>
+      {/* 練習タイマー */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:"12px", padding:"2px 6px 4px", fontSize:"12px", color:TH.dim }}>
+        {playing && elapsedSec > 0 && (
+          <span style={{ color:TH.gold, fontWeight:600 }}>⏱ {formatTime(elapsedSec)}</span>
+        )}
+        {totalPracticeSec > 0 && (
+          <>
+            <span>累計: {formatTime(totalPracticeSec + (playing ? elapsedSec : 0))}</span>
+            {!playing && (
+              <button onClick={() => setTotalPracticeSec(0)} style={{
+                border:"none", cursor:"pointer", background:"none",
+                color:TH.dim, fontSize:"11px", fontWeight:600, padding:"1px 4px",
+              }}>リセット</button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// ── Scale Card Row ──
+// showMode: "音名" | "度数" の2モード（既存通り）
+const SHOW_MODES = ["音名","度数"];
+
+function ScaleCardRow({ pin, onRemove, onUpdate, onMoveUp, onMoveDown, index, scaleCount, accentColor }) {
+  // showMode / viewMode / pos は親stateから読む（localStorageに保存される）
+  const showMode = pin.showMode ?? "音名";
+  const viewMode = pin.viewMode ?? "全体";
+  const pos = pin.selectedPos ?? 0;
+  const showNeighbor = pin.showNeighbor ?? false;
+  // UI開閉stateはローカルのまま
+  const [rootPopup, setRootPopup] = useState(false);
+  const [scalePopup, setScalePopup] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const rootAnchorRef = useRef(null);
+  const scaleAnchorRef = useRef(null);
+
+  const { root: pRoot, scaleName: pScale } = pin;
+  const pPositions3NPS = useMemo(() => generate3NPS(pRoot, pScale), [pRoot, pScale]);
+  const pPositionsCAGED = useMemo(() => generateCAGED(pRoot, pScale), [pRoot, pScale]);
+  const pPositionsBOX = useMemo(() => generateBOX(pRoot, pScale), [pRoot, pScale]);
+  const pPositions = useMemo(() => getPositionsForMode(viewMode, pPositions3NPS, pPositionsCAGED, pPositionsBOX), [viewMode, pPositions3NPS, pPositionsCAGED, pPositionsBOX]);
+  const total = pPositions.length;
+  const safePos = total > 0 ? Math.min(pos, total - 1) : 0;
+  const pActiveFrets = useMemo(() => { if (viewMode==="全体") return null; return pPositions[safePos]?.frets ?? null; }, [viewMode, safePos, pPositions]);
+  const pRange = useMemo(() => { if (viewMode==="全体") return null; const p = pPositions[safePos]; if (!p||p.lo===undefined) return null; return {lo:p.lo,hi:p.hi}; }, [viewMode, safePos, pPositions]);
+  const pPcs = useMemo(() => scalePcs(pRoot, pScale), [pRoot, pScale]);
+  // rootSpelling が全ての表示の正。旧データのみinferで補完
+  const pRootSpelling = pin.rootSpelling || inferRootSpelling(pRoot, pin.useFlat ?? false);
+  // noteFlat: rootSpellingから導出（rootSpellingが主）
+  const noteFlat = isSpellingFlat(pRootSpelling) || getScaleDefaultFlat(pScale);
+  // 構成音名: 統一関数経由
+  const pNoteNames = useMemo(() =>
+    getScaleNoteNames(pRootSpelling, pScale, pRoot, noteFlat),
+    [pRootSpelling, pScale, pRoot, noteFlat]
+  );
+  const pDegNames = getScaleDisplayDegrees(pScale);
+  const pPosLabel = pPositions[safePos]?.label;
+  const hasPositions = viewMode !== "全体" && viewMode !== "R35" && viewMode !== "R37" && viewMode !== "ルート" && total > 0;
+
+  // 前後ポジションのfrets（つながり表示用）
+  const neighborFrets = useMemo(() => {
+    if (!showNeighbor || viewMode === "全体" || total <= 1) return null;
+    const prevIdx = (safePos - 1 + total) % total;
+    const nextIdx = (safePos + 1) % total;
+    const prev = pPositions[prevIdx]?.frets;
+    const next = pPositions[nextIdx]?.frets;
+    if (!prev && !next) return null;
+    const merged = {};
+    for (let si = 0; si < NUM_STRINGS; si++) {
+      const set = new Set();
+      if (prev?.[si]) prev[si].forEach(f => set.add(f));
+      if (next?.[si]) next[si].forEach(f => set.add(f));
+      merged[si] = [...set].sort((a, b) => a - b);
+    }
+    return merged;
+  }, [showNeighbor, viewMode, total, safePos, pPositions]);
+
+  // 全操作をonUpdateで親へ反映
+  const changeView = (m) => { onUpdate({ viewMode: m, selectedPos: 0 }); };
+  // ルート変更: 現在の♯/♭設定（rootSpellingから判定）で新rootのspellingを生成
+  const handleRootChange = (newRoot) => {
+    const newSpelling = inferRootSpelling(newRoot, isSpellingFlat(pRootSpelling));
+    onUpdate({ root: newRoot, selectedPos: 0, rootSpelling: newSpelling, useFlat: isSpellingFlat(newSpelling) });
+  };
+  // スケール変更: rootSpellingは維持する（F# Major → F# Minor でG♭に変えない）
+  const handleScaleChange = (newScale) => {
+    const new3 = generate3NPS(pRoot, newScale);
+    const newC = generateCAGED(pRoot, newScale);
+    const newB = generateBOX(pRoot, newScale);
+    let newViewMode = viewMode;
+    if (viewMode === "3NPS" && new3.length === 0) newViewMode = "全体";
+    if (viewMode === "CAGED" && newC.length === 0) newViewMode = "全体";
+    if (viewMode === "BOX" && newB.length === 0) newViewMode = "全体";
+    // rootSpellingは現在のまま維持。useFlatもrootSpellingに合わせる
+    onUpdate({ scaleName: newScale, selectedPos: 0, viewMode: newViewMode });
+  };
+  // ♯/♭切替: ユーザーの明示的な意図 → rootSpellingを更新、useFlatはrootSpellingに従属
+  const handleFlatToggle = (flat) => {
+    const newSpelling = inferRootSpelling(pRoot, flat);
+    onUpdate({ rootSpelling: newSpelling, useFlat: isSpellingFlat(newSpelling) });
+  };
+
+  const chipBase = {
+    display:"inline-flex", alignItems:"center", justifyContent:"center",
+    minWidth:"36px", height:"36px", padding:"0 8px",
+    borderRadius:"18px", fontSize:"15px", fontWeight:700, fontFamily:"monospace", flexShrink:0,
+  };
+  const isRoot = (i) => i === 0;
+  const tappableStyle = { cursor:"pointer", transition:"all 0.12s", borderRadius:"6px", padding:"4px 8px" };
+
+  return (
+    <div id={`scale-card-${pin.id}`} style={{ borderTop: index > 1 ? `1px solid ${TH.border}` : "none", paddingTop: index > 1 ? "12px" : "0", marginBottom:"10px" }}>
+      <div className="sv-right-area" style={{ borderLeft:`3px solid ${accentColor}`, borderRadius:"12px" }}>
+      <div className="sv-mid">
+        <Card style={{ padding:"0", marginBottom:"0", position:"relative", overflow:"visible" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:"8px", padding:"10px 12px" }}>
+            <div style={{ flex:"1 1 auto", minWidth:0, position:"relative", display:"flex", alignItems:"center", gap:"12px" }}>
+              <span ref={rootAnchorRef} className="sv-tappable" onClick={(e) => { e.stopPropagation(); setRootPopup(!rootPopup); setScalePopup(false); }}
+                style={{ ...tappableStyle, color:accentColor, fontSize:"24px", fontWeight:700,
+                  background: rootPopup ? `${accentColor}22` : TH.btnBg,
+                  border: `1.5px solid ${rootPopup ? accentColor : TH.border}`,
+                }}>{pRootSpelling}<span style={{fontSize:"15px",marginLeft:"3px",opacity:0.6}}>▾</span></span>
+              <span ref={scaleAnchorRef} className="sv-tappable" onClick={(e) => { e.stopPropagation(); setScalePopup(!scalePopup); setRootPopup(false); }}
+                style={{ ...tappableStyle, color:TH.scaleName, fontSize:"17px",
+                  background: scalePopup ? "rgba(255,255,255,0.06)" : TH.btnBg,
+                  border: `1.5px solid ${scalePopup ? TH.goldDim : TH.border}`,
+                }}>{pScale}<span style={{fontSize:"13px",marginLeft:"3px",opacity:0.4}}>▾</span></span>
+              <button className="sv-detail-toggle" onClick={(e) => { e.stopPropagation(); setDetailOpen(!detailOpen); }} style={{
+                border:"none", cursor:"pointer", background:TH.btnBg,
+                color:TH.dim, fontSize: detailOpen ? "16px" : "13px", borderRadius:"6px",
+                transition:"all 0.15s", flexShrink:0, fontWeight:700, letterSpacing: detailOpen ? "0" : "1px",
+                width:"36px", height:"36px", display:"inline-flex", alignItems:"center", justifyContent:"center",
+              }}>{detailOpen ? "−" : "…"}</button>
+
+              <Popup anchorRef={rootAnchorRef} open={rootPopup} onClose={() => setRootPopup(false)}>
+                <RootPicker currentRoot={pRoot} useFlat={isSpellingFlat(pRootSpelling)} onSelect={(r) => { handleRootChange(r); setRootPopup(false); }} onToggleFlat={handleFlatToggle} />
+              </Popup>
+              <Popup anchorRef={scaleAnchorRef} open={scalePopup} onClose={() => setScalePopup(false)}>
+                <ScalePicker currentScale={pScale} onSelect={(s) => { handleScaleChange(s); setScalePopup(false); }} />
+              </Popup>
+            </div>
+
+            <div style={{ display:"flex", alignItems:"center", gap:"6px", flexShrink:0 }}>
+              {scaleCount > 1 && (
+                <>
+                  <button onClick={(e) => { e.stopPropagation(); onMoveUp(); }} style={{
+                    border:"none", cursor:"pointer",
+                    background: index > 0 ? TH.btnBg : "transparent",
+                    color: index > 0 ? TH.dim : "transparent",
+                    fontSize:"15px", fontWeight:700, lineHeight:1,
+                    width:"36px", height:"36px", borderRadius:"6px",
+                    display:"inline-flex", alignItems:"center", justifyContent:"center",
+                    transition:"all 0.12s",
+                    pointerEvents: index > 0 ? "auto" : "none",
+                  }}>▲</button>
+                  <button onClick={(e) => { e.stopPropagation(); onMoveDown(); }} style={{
+                    border:"none", cursor:"pointer",
+                    background: index < scaleCount - 1 ? TH.btnBg : "transparent",
+                    color: index < scaleCount - 1 ? TH.dim : "transparent",
+                    fontSize:"15px", fontWeight:700, lineHeight:1,
+                    width:"36px", height:"36px", borderRadius:"6px",
+                    display:"inline-flex", alignItems:"center", justifyContent:"center",
+                    transition:"all 0.12s",
+                    pointerEvents: index < scaleCount - 1 ? "auto" : "none",
+                  }}>▼</button>
+                </>
+              )}
+              <button onClick={(e) => { e.stopPropagation(); setConfirmDelete(true); }} style={{
+                border:"none", cursor:"pointer", background:"none",
+                color:TH.dim, fontSize:"20px", fontWeight:700, lineHeight:1,
+                width:"36px", height:"36px", borderRadius:"6px",
+                display:"inline-flex", alignItems:"center", justifyContent:"center",
+                transition:"all 0.12s",
+              }}>×</button>
+            </div>
+          </div>
+
+          {confirmDelete && (
+            <div onClick={() => setConfirmDelete(false)} style={{
+              position:"fixed", inset:0, zIndex:200,
+              background:TH.overlay, display:"flex", alignItems:"center", justifyContent:"center", padding:"20px",
+            }}>
+              <div onClick={(e) => e.stopPropagation()} style={{
+                background:TH.popupBg, border:`1px solid ${TH.popupBorder}`,
+                borderRadius:"14px", padding:"24px", boxShadow:"0 12px 48px rgba(0,0,0,0.7)",
+                width:"100%", maxWidth:"320px", textAlign:"center",
+              }}>
+                <div style={{ fontSize:"15px", fontWeight:700, color:TH.text, marginBottom:"6px" }}>
+                  スケールを削除
+                </div>
+                <div style={{ fontSize:"13px", color:TH.dim, marginBottom:"18px" }}>
+                  <span style={{ color:TH.rootName, fontWeight:700 }}>{pRootSpelling}</span>{" "}
+                  <span style={{ color:TH.scaleName, fontWeight:600 }}>{pScale}</span>{" "}
+                  を削除しますか？
+                </div>
+                <div style={{ display:"flex", gap:"8px" }}>
+                  <button onClick={() => setConfirmDelete(false)} style={{
+                    flex:"1 1 0", border:`1px solid ${TH.border}`, cursor:"pointer",
+                    fontFamily:"inherit", outline:"none", fontWeight:600, fontSize:"14px",
+                    borderRadius:"8px", padding:"10px 0",
+                    background:"transparent", color:TH.dim, transition:"all 0.12s",
+                  }}>キャンセル</button>
+                  <button onClick={() => { setConfirmDelete(false); onRemove(); }} style={{
+                    flex:"1 1 0", border:"none", cursor:"pointer",
+                    fontFamily:"inherit", outline:"none", fontWeight:700, fontSize:"14px",
+                    borderRadius:"8px", padding:"10px 0",
+                    background:"#c44", color:"#fff", transition:"all 0.12s",
+                  }}>削除</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="sv-detail-area" style={{ margin:"0 8px 8px", padding:"8px 10px", border:`1px solid ${TH.border}`, borderRadius:"8px", background:TH.surface, display: detailOpen ? "block" : "none" }}>
+              <div style={{ fontSize:"10px", color:TH.dim, marginBottom:"3px", fontWeight:600 }}>構成音</div>
+              <div style={{ display:"flex", gap:"3px", marginBottom:"6px", overflowX:"auto", flexWrap:"nowrap", WebkitOverflowScrolling:"touch" }}>
+                {pNoteNames.map((n, i) => (
+                  <span key={i} style={{ ...chipBase,
+                    background: isRoot(i) ? TH.rootBg : "rgba(74,144,217,0.85)",
+                    color: isRoot(i) ? TH.rootFg : "#fff",
+                    border: isRoot(i) ? `1.5px solid ${TH.rootStroke}` : "none",
+                  }}>{n}</span>
+                ))}
+              </div>
+              <div style={{ fontSize:"10px", color:TH.dim, marginBottom:"3px", fontWeight:600 }}>度数</div>
+              <div style={{ display:"flex", gap:"3px", overflowX:"auto", flexWrap:"nowrap", WebkitOverflowScrolling:"touch" }}>
+                {pDegNames.map((d, i) => (
+                  <span key={i} style={{ ...chipBase,
+                    background: isRoot(i) ? TH.rootBg : "#2a2a2a",
+                    color: isRoot(i) ? TH.rootFg : TH.gold,
+                    border: isRoot(i) ? `1.5px solid ${TH.rootStroke}` : `1.5px solid ${TH.goldDim}`,
+                  }}>{d}</span>
+                ))}
+              </div>
+              {/* インターバルパターン（全全半...）をivから自動生成 */}
+              {(() => {
+                const def = getScaleDef(pScale);
+                if (!def) return null;
+                const iv = def.semitones;
+                const steps = [];
+                for (let i = 0; i < iv.length; i++) {
+                  const next = i < iv.length - 1 ? iv[i + 1] : 12;
+                  const diff = next - iv[i];
+                  if (diff === 1) steps.push("半");
+                  else if (diff === 2) steps.push("全");
+                  else if (diff === 3) steps.push("増");
+                  else steps.push(diff.toString());
+                }
+                return (
+                  <div style={{ marginTop:"8px" }}>
+                    <div style={{ fontSize:"10px", color:TH.dim, marginBottom:"3px", fontWeight:600 }}>インターバル</div>
+                    <div style={{ display:"flex", gap:"4px", flexWrap:"wrap" }}>
+                      {steps.map((s, i) => (
+                        <span key={i} style={{
+                          display:"inline-flex", alignItems:"center", justifyContent:"center",
+                          width:"28px", height:"28px", borderRadius:"50%",
+                          fontSize:"11px", fontWeight:700, fontFamily:"sans-serif",
+                          background: s === "半" ? "#3a2a2a" : s === "全" ? "#2a2a3a" : "#2a3a2a",
+                          color: s === "半" ? "#e88" : s === "全" ? "#8af" : "#8e8",
+                          border: `1.5px solid ${s === "半" ? "#c55" : s === "全" ? "#68c" : "#5a5"}`,
+                        }}>{s}</span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+          </div>
+        </Card>
+      </div>
+      <div className="sv-board">
+        <Card style={{padding:"8px", flex:1, overflow:"hidden", marginBottom:"0"}}>
+          {/* 上段: 表示モード切替 */}
+          <div style={{ display:"flex", alignItems:"center", gap:"6px", marginBottom: hasPositions ? "4px" : "6px" }}>
+            {/* showMode: 音名/度数トグル */}
+            <button className="sv-tappable sv-flash-border" onClick={() => onUpdate({ showMode: showMode === "音名" ? "度数" : "音名" })} style={{
+              border:`1.5px solid ${TH.border}`, cursor:"pointer", fontFamily:"inherit", outline:"none",
+              fontWeight:600, fontSize:"13px", borderRadius:"6px", padding:"8px 14px",
+              transition:"all 0.12s", minHeight:"38px",
+              background: TH.btnBg, color: TH.btnFg,
+            }}>{showMode}</button>
+            <div style={{ display:"flex", gap:"4px", flex:"1 1 auto" }}>
+              {/* 全体/R35/R37/ルート: 1ボタンで循環 */}
+              {(() => {
+                const isDisplayCycle = DISPLAY_CYCLE.includes(viewMode);
+                const currentLabel = isDisplayCycle ? viewMode : "全体";
+                const cycleDisplay = () => {
+                  if (!isDisplayCycle) { changeView("全体"); return; }
+                  const idx = DISPLAY_CYCLE.indexOf(viewMode);
+                  const next = DISPLAY_CYCLE[(idx + 1) % DISPLAY_CYCLE.length];
+                  changeView(next);
+                };
+                return (
+                  <button className="sv-tappable sv-flash-border" onClick={cycleDisplay} style={{
+                    border:`1.5px solid ${isDisplayCycle && viewMode !== "全体" ? TH.gold : TH.border}`,
+                    cursor:"pointer", fontFamily:"inherit", outline:"none",
+                    fontWeight:600, fontSize:"13px", borderRadius:"6px", padding:"8px 14px",
+                    transition:"all 0.12s", minHeight:"38px",
+                    background: isDisplayCycle ? TH.btnActiveBg : TH.btnBg,
+                    color: isDisplayCycle ? TH.btnActiveFg : TH.btnFg,
+                  }}>{currentLabel}</button>
+                );
+              })()}
+              {/* 3NPS / BOX / CAGED: 個別ボタン */}
+              {["3NPS","BOX","CAGED"].map(m => {
+                if (m === "3NPS" && pPositions3NPS.length === 0) return null;
+                if (m === "BOX" && pPositionsBOX.length === 0) return null;
+                if (m === "CAGED" && pPositionsCAGED.length === 0) return null;
+                return (
+                <button key={m} onClick={() => changeView(m)} style={{
+                  border:"none", cursor:"pointer", fontFamily:"inherit", outline:"none",
+                  fontWeight:600, fontSize:"13px", borderRadius:"6px", padding:"8px 14px",
+                  transition:"all 0.12s", minHeight:"38px",
+                  background: viewMode===m ? TH.btnActiveBg : TH.btnBg,
+                  color: viewMode===m ? TH.btnActiveFg : TH.btnFg,
+                }}>{m}</button>
+                );
+              })}
+            </div>
+          </div>
+          {/* 下段: ポジション操作（3NPS/BOX/CAGED時のみ） */}
+          {hasPositions && (
+            <div style={{ display:"flex", alignItems:"center", gap:"6px", marginBottom:"6px" }}>
+              <button onClick={() => onUpdate({ selectedPos: (safePos-1+total)%total })} style={{
+                border:"none", cursor:"pointer", fontFamily:"inherit", outline:"none",
+                background:TH.btnBg, color:TH.gold, fontSize:"16px", fontWeight:700,
+                borderRadius:"6px", width:"40px", height:"40px",
+                display:"inline-flex", alignItems:"center", justifyContent:"center",
+              }}>◀</button>
+              <span style={{ fontSize:"16px", fontWeight:700, color:TH.gold, minWidth:"72px", textAlign:"center", whiteSpace:"nowrap" }}>
+                {pPosLabel}{viewMode !== "CAGED" ? ` / ${total}` : ""}
+              </span>
+              <button onClick={() => onUpdate({ selectedPos: (safePos+1)%total })} style={{
+                border:"none", cursor:"pointer", fontFamily:"inherit", outline:"none",
+                background:TH.btnBg, color:TH.gold, fontSize:"16px", fontWeight:700,
+                borderRadius:"6px", width:"40px", height:"40px",
+                display:"inline-flex", alignItems:"center", justifyContent:"center",
+              }}>▶</button>
+              {/* つながり表示トグル */}
+              <button className="sv-tappable" onClick={() => onUpdate({ showNeighbor: !showNeighbor })} style={{
+                border:`1px solid ${showNeighbor ? TH.gold : TH.border}`, cursor:"pointer", fontFamily:"inherit", outline:"none",
+                fontWeight:600, fontSize:"12px", borderRadius:"6px", padding:"8px 12px",
+                transition:"all 0.12s", minHeight:"38px",
+                background: showNeighbor ? `${TH.gold}22` : TH.btnBg,
+                color: showNeighbor ? TH.gold : TH.dim,
+              }}>前後</button>
+            </div>
+          )}
+          {viewMode !== "全体" && viewMode !== "R35" && viewMode !== "R37" && viewMode !== "ルート" && total === 0 ? (
+            <div style={{ padding:"20px", textAlign:"center", color:TH.dim, fontSize:"13px" }}>
+              このスケールでは {viewMode} は未対応です
+            </div>
+          ) : (
+            <Fretboard rootPc={pRoot} scaleKey={pScale} showMode={showMode} viewMode={viewMode}
+              activeFrets={pActiveFrets} positionRange={pRange} useFlat={noteFlat} compact={true}
+              neighborFrets={neighborFrets} rootSpelling={pRootSpelling} />
+          )}
+        </Card>
+      </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main ──
+function GuitarScaleViewer() {
+  const saved = useMemo(() => loadState(), []);
+  const initScales = useMemo(() => {
+    const raw = saved?.scales;
+    const defaultScale = [
+      { root: 0, scaleName: "Major", viewMode: "全体", showMode: "音名", selectedPos: 0, useFlat: false, id: 1, accentColor: ACCENT_COLORS[0] }
+    ];
+    const src = (raw && raw.length > 0) ? raw : defaultScale;
+    // normalizeScaleEntry で rootSpelling / useFlat を正規化
+    return src.map((s, i) => ({
+      viewMode: "全体",
+      showMode: "音名",
+      selectedPos: 0,
+      ...normalizeScaleEntry(s),
+      accentColor: s.accentColor || ACCENT_COLORS[i % ACCENT_COLORS.length],
+    }));
+  }, []);
+  const [scales, setScales] = useState(initScales);
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
+  const [testErrors] = useState(() => runSelfTests());
+  // モーダルのルート選択を記憶（閉じても保持）
+  // modalSpelling が主役。modalFlat は従属値
+  const [modalRoot, setModalRoot] = useState(0);
+  const [modalSpelling, setModalSpelling] = useState("C");
+  const handleModalRootChange = (newRoot) => {
+    setModalRoot(newRoot);
+    setModalSpelling(inferRootSpelling(newRoot, isSpellingFlat(modalSpelling)));
+  };
+  const handleModalFlatToggle = (flat) => {
+    setModalSpelling(inferRootSpelling(modalRoot, flat));
+  };
+  // プリセット機能
+  const [presets, setPresets] = useState(() => loadPresets());
+  const [presetOpen, setPresetOpen] = useState(false);
+  const [presetName, setPresetName] = useState("");
+  const [confirmLoadPreset, setConfirmLoadPreset] = useState(null); // 呼び出し確認用
+
+  const saveCurrentAsPreset = (name) => {
+    if (!name.trim()) return;
+    // rootSpellingを必ず保存（プリセット復元時に理論綴りを維持するため）
+    const preset = {
+      id: Date.now() + Math.random().toString(36).slice(2,6),
+      name: name.trim(),
+      scales: scales.map(s => ({
+        root: s.root,
+        scaleName: s.scaleName,
+        useFlat: s.useFlat,
+        rootSpelling: s.rootSpelling || inferRootSpelling(s.root, s.useFlat),
+      })),
+    };
+    const updated = [...presets, preset];
+    setPresets(updated);
+    savePresets(updated);
+    setPresetName("");
+  };
+
+  const loadPreset = (preset) => {
+    colorCounterRef.current = 0;
+    // normalizeScaleEntry で rootSpelling / useFlat を正規化して復元
+    const loaded = preset.scales.map((s, i) => {
+      const color = ACCENT_COLORS[i % ACCENT_COLORS.length];
+      return {
+        ...normalizeScaleEntry(s),
+        viewMode:"全体", showMode:"音名", selectedPos:0,
+        id: Date.now() + i + Math.random().toString(36).slice(2,6),
+        accentColor: color,
+      };
+    });
+    colorCounterRef.current = loaded.length;
+    setScales(loaded);
+    setPresetOpen(false);
+  };
+
+  const deletePreset = (id) => {
+    const updated = presets.filter(p => p.id !== id);
+    setPresets(updated);
+    savePresets(updated);
+  };
+
+  useEffect(() => { saveState({ scales }); }, [scales]);
+
+  const colorCounterRef = useRef(scales.length);
+  const addScale = ({ root, scaleName, rootSpelling: spelling }) => {
+    const color = ACCENT_COLORS[colorCounterRef.current % ACCENT_COLORS.length];
+    colorCounterRef.current++;
+    // rootSpellingが渡されるので、それを正としてnormalize
+    const entry = normalizeScaleEntry({ root, scaleName, rootSpelling: spelling });
+    setScales(prev => [...prev, {
+      ...entry,
+      viewMode:"全体", showMode:"音名", selectedPos:0,
+      id: Date.now() + Math.random().toString(36).slice(2,6),
+      accentColor: color,
+    }]);
+  };
+  const removeScale = (id) => { setScales(prev => prev.filter(p => p.id !== id)); };
+  const updateScale = (id, patch) => { setScales(prev => prev.map(s => s.id === id ? { ...s, ...patch } : s)); };
+  const moveScale = (idx, dir) => {
+    setScales(prev => {
+      const next = [...prev];
+      const t = idx + dir;
+      if (t < 0 || t >= next.length) return prev;
+      [next[idx], next[t]] = [next[t], next[idx]];
+      // 移動先のカードにスクロール追従
+      const movedId = next[t].id;
+      setTimeout(() => {
+        const el = document.getElementById(`scale-card-${movedId}`);
+        if (el) el.scrollIntoView({ behavior:"smooth", block:"nearest" });
+      }, 50);
+      return next;
+    });
+  };
+  const clearScales = () => { setScales([]); };
+
+  return (
+    <div style={{ fontFamily:"'Segoe UI','Helvetica Neue',Arial,sans-serif", background:TH.bg, color:TH.text, minHeight:"100vh", padding:"12px", boxSizing:"border-box", overflowX:"hidden" }}>
+      <div style={{ textAlign:"center", marginBottom:"12px" }}>
+        <h1 style={{ fontSize:"24px", fontWeight:700, margin:0, color:TH.gold, fontFamily:"'Cinzel',serif", letterSpacing:"3px", textTransform:"uppercase" }}>Scale Viewer</h1>
+      </div>
+
+      {testErrors.length > 0 && <Card style={{borderColor:"#c44",background:"#2a1515"}}><div style={{color:"#f88",fontSize:"12px",fontWeight:600}}>⚠ セルフテスト失敗:</div>{testErrors.map((e,i) => <div key={i} style={{color:"#faa",fontSize:"11px",marginTop:2}}>{e}</div>)}</Card>}
+
+      <Card style={{padding:"6px 10px", marginBottom:"10px"}}>
+        <Metronome />
+      </Card>
+
+      {scales.length === 0 && (
+        <div style={{ textAlign:"center", padding:"40px 20px", color:TH.dim, fontSize:"14px" }}>
+          スケールを追加して練習を始めましょう
+        </div>
+      )}
+      {scales.map((pin, idx) => (
+        <ScaleCardRow key={pin.id} pin={pin} index={idx} scaleCount={scales.length} accentColor={pin.accentColor || ACCENT_COLORS[idx % ACCENT_COLORS.length]} onRemove={() => removeScale(pin.id)} onUpdate={(patch) => updateScale(pin.id, patch)} onMoveUp={() => moveScale(idx, -1)} onMoveDown={() => moveScale(idx, 1)} />
+      ))}
+
+      <div style={{ marginTop:"6px", display:"flex", flexDirection:"column", gap:"8px" }}>
+        <button onClick={() => setAddModalOpen(true)} style={{
+          width:"100%", border:`1.5px dashed ${TH.goldDim}`, cursor:"pointer",
+          fontFamily:"inherit", outline:"none",
+          fontSize:"14px", fontWeight:600, borderRadius:"10px", padding:"12px 0",
+          background:"transparent", color:TH.goldDim, transition:"all 0.15s",
+        }}>＋ スケールを追加</button>
+
+        <div style={{ display:"flex", gap:"6px" }}>
+          {scales.length > 0 && (
+            <button onClick={() => setConfirmClearAll(true)} style={{
+              flex:"1 1 0", border:"none", cursor:"pointer",
+              fontFamily:"inherit", outline:"none",
+              fontSize:"12px", fontWeight:500, borderRadius:"8px", padding:"7px 0",
+              background:TH.surface, color:TH.dim, transition:"all 0.15s",
+            }}>すべてクリア</button>
+          )}
+          <button onClick={() => setPresetOpen(!presetOpen)} style={{
+            flex:"1 1 0", border:"none", cursor:"pointer",
+            fontFamily:"inherit", outline:"none",
+            fontSize:"12px", fontWeight:600, borderRadius:"8px", padding:"7px 0",
+            background: presetOpen ? TH.btnActiveBg : TH.surface,
+            color: presetOpen ? TH.btnActiveFg : TH.gold, transition:"all 0.15s",
+          }}>★ 今の配置を保存する</button>
+        </div>
+
+        {/* お気に入りセットパネル */}
+        {presetOpen && (
+          <div style={{ border:`1px solid ${TH.border}`, borderRadius:"10px", padding:"10px", background:TH.surface }}>
+            {/* 現在の構成を保存 */}
+            {scales.length > 0 && (
+              <div>
+                <div style={{ fontSize:"11px", color:TH.dim, marginBottom:"4px" }}>今のスケール構成を名前をつけて保存できます</div>
+                <div style={{ display:"flex", gap:"6px", marginBottom:"8px" }}>
+                  <input
+                    type="text" placeholder="例: ブルース練習セット" value={presetName}
+                    onChange={(e) => setPresetName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") saveCurrentAsPreset(presetName); }}
+                    style={{
+                      flex:"1 1 0", fontSize:"13px", padding:"7px 10px", borderRadius:"6px",
+                      border:`1px solid ${TH.border}`, background:TH.card, color:TH.text,
+                      fontFamily:"inherit", outline:"none",
+                    }}
+                  />
+                  <button onClick={() => saveCurrentAsPreset(presetName)} style={{
+                    border:"none", cursor:"pointer", fontFamily:"inherit", outline:"none",
+                    fontSize:"12px", fontWeight:700, borderRadius:"6px", padding:"7px 12px",
+                    background:TH.gold, color:TH.btnActiveFg, transition:"all 0.12s",
+                    opacity: presetName.trim() ? 1 : 0.4,
+                  }}>保存</button>
+                </div>
+              </div>
+            )}
+            {/* 保存済み一覧 */}
+            {presets.length === 0 ? (
+              <div style={{ fontSize:"12px", color:TH.dim, textAlign:"center", padding:"8px 0" }}>
+                保存したセットはまだありません
+              </div>
+            ) : (
+              <div style={{ display:"flex", flexDirection:"column", gap:"4px" }}>
+                {presets.map(p => (
+                  <div key={p.id} style={{ display:"flex", alignItems:"center", gap:"6px" }}>
+                    <button onClick={() => setConfirmLoadPreset(p)} style={{
+                      flex:"1 1 0", border:"none", cursor:"pointer", fontFamily:"inherit", outline:"none",
+                      fontSize:"13px", fontWeight:600, borderRadius:"6px", padding:"8px 10px",
+                      background:TH.btnBg, color:TH.text, transition:"all 0.12s", textAlign:"left",
+                    }}>
+                      <span style={{ color:TH.gold }}>★</span> {p.name}
+                      <span style={{ fontSize:"11px", color:TH.dim, marginLeft:"6px" }}>
+                        ({p.scales.map(s => (s.rootSpelling || inferRootSpelling(s.root, s.useFlat)) + " " + s.scaleName).join(", ")})
+                      </span>
+                    </button>
+                    <button onClick={() => deletePreset(p.id)} style={{
+                      border:"none", cursor:"pointer", background:"none",
+                      color:TH.dim, fontSize:"16px", fontWeight:700, padding:"2px 6px",
+                      transition:"all 0.12s",
+                    }}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* お気に入りセット呼び出し確認ポップアップ */}
+      {confirmLoadPreset && (
+        <div onClick={() => setConfirmLoadPreset(null)} style={{
+          position:"fixed", inset:0, zIndex:200,
+          background:TH.overlay, display:"flex", alignItems:"center", justifyContent:"center", padding:"20px",
+        }}>
+          <div onClick={(e) => e.stopPropagation()} style={{
+            background:TH.popupBg, border:`1px solid ${TH.popupBorder}`,
+            borderRadius:"14px", padding:"24px", boxShadow:"0 12px 48px rgba(0,0,0,0.7)",
+            width:"100%", maxWidth:"340px", textAlign:"center",
+          }}>
+            <div style={{ fontSize:"15px", fontWeight:700, color:TH.gold, marginBottom:"8px" }}>
+              ★ {confirmLoadPreset.name}
+            </div>
+            <div style={{ fontSize:"13px", color:TH.dim, marginBottom:"6px" }}>
+              以下のスケールに切り替えます
+            </div>
+            <div style={{ fontSize:"13px", color:TH.text, marginBottom:"16px", lineHeight:1.6 }}>
+              {confirmLoadPreset.scales.map((s, i) => (
+                <div key={i}>{s.rootSpelling || inferRootSpelling(s.root, s.useFlat)} {s.scaleName}</div>
+              ))}
+            </div>
+            <div style={{ fontSize:"12px", color:TH.dim, marginBottom:"16px" }}>
+              ※ 現在のスケール表示は置き換わります
+            </div>
+            <div style={{ display:"flex", gap:"8px" }}>
+              <button onClick={() => setConfirmLoadPreset(null)} style={{
+                flex:"1 1 0", border:`1px solid ${TH.border}`, cursor:"pointer",
+                fontFamily:"inherit", outline:"none", fontWeight:600, fontSize:"14px",
+                borderRadius:"8px", padding:"10px 0",
+                background:"transparent", color:TH.dim, transition:"all 0.12s",
+              }}>キャンセル</button>
+              <button onClick={() => { loadPreset(confirmLoadPreset); setConfirmLoadPreset(null); }} style={{
+                flex:"1 1 0", border:"none", cursor:"pointer",
+                fontFamily:"inherit", outline:"none", fontWeight:700, fontSize:"14px",
+                borderRadius:"8px", padding:"10px 0",
+                background:TH.gold, color:TH.btnActiveFg, transition:"all 0.12s",
+              }}>呼び出す</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{textAlign:"center",padding:"10px 0 6px",fontSize:"10px",color:TH.dim,opacity:0.4}}>スケールビューア v1.4</div>
+
+      <AddScaleModal open={addModalOpen} onClose={() => setAddModalOpen(false)} onAdd={addScale} modalRoot={modalRoot} modalSpelling={modalSpelling} onRootChange={handleModalRootChange} onFlatToggle={handleModalFlatToggle} />
+
+      {confirmClearAll && (
+        <div onClick={() => setConfirmClearAll(false)} style={{
+          position:"fixed", inset:0, zIndex:200,
+          background:TH.overlay, display:"flex", alignItems:"center", justifyContent:"center", padding:"20px",
+        }}>
+          <div onClick={(e) => e.stopPropagation()} style={{
+            background:TH.popupBg, border:`1px solid ${TH.popupBorder}`,
+            borderRadius:"14px", padding:"24px", boxShadow:"0 12px 48px rgba(0,0,0,0.7)",
+            width:"100%", maxWidth:"320px", textAlign:"center",
+          }}>
+            <div style={{ fontSize:"15px", fontWeight:700, color:TH.text, marginBottom:"6px" }}>
+              すべてクリア
+            </div>
+            <div style={{ fontSize:"13px", color:TH.dim, marginBottom:"18px" }}>
+              {scales.length}件のスケールをすべて削除しますか？
+            </div>
+            <div style={{ display:"flex", gap:"8px" }}>
+              <button onClick={() => setConfirmClearAll(false)} style={{
+                flex:"1 1 0", border:`1px solid ${TH.border}`, cursor:"pointer",
+                fontFamily:"inherit", outline:"none", fontWeight:600, fontSize:"14px",
+                borderRadius:"8px", padding:"10px 0",
+                background:"transparent", color:TH.dim, transition:"all 0.12s",
+              }}>キャンセル</button>
+              <button onClick={() => { clearScales(); setConfirmClearAll(false); }} style={{
+                flex:"1 1 0", border:"none", cursor:"pointer",
+                fontFamily:"inherit", outline:"none", fontWeight:700, fontSize:"14px",
+                borderRadius:"8px", padding:"10px 0",
+                background:"#c44", color:"#fff", transition:"all 0.12s",
+              }}>すべて削除</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.render(<GuitarScaleViewer />, document.getElementById("root"));
+</script>
+</body>
+</html>
