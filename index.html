@@ -1019,9 +1019,9 @@ function Fretboard({ rootPc, scaleKey, showMode, viewMode, activeFrets, position
   const shouldShow = useCallback((si, f) => {
     const pc = noteAt(si, f);
     if (!pcs.includes(pc)) return false;
-    if (viewMode === "ルート") return pc === rootPc;
+    // ルートモードでも全音表示する（描画側で非ルート音を薄くする）
     return true;
-  }, [pcs, viewMode, rootPc]);
+  }, [pcs]);
 
   // R35/R37のハイライト判定: 対象度数かどうか
   const highlightDegs = VIEW_HIGHLIGHT_DEGREES[viewMode] || null;
@@ -1109,11 +1109,37 @@ function Fretboard({ rootPc, scaleKey, showMode, viewMode, activeFrets, position
         : degreeLabel(rootPc,pc,scaleKey);
       const cx = fretX(f), cy = stringY(si);
       const long = lb.length > 2;
-      // R35/R37: 全体表示 + ハイライト音に外枠
       const hl = isHighlighted(si, f);
-      if (viewMode !== "全体" && viewMode !== "R35" && viewMode !== "R37" && viewMode !== "ルート" && !act) {
+      const isR35R37 = viewMode === "R35" || viewMode === "R37";
+
+      // ── ルートモード: ルート音は強調、それ以外は薄いゴールド丸枠 ──
+      if (viewMode === "ルート" && !isR) {
+        const nR = 11 * dotScale;
+        els.push(<g key={`n${si}_${f}`}>
+          <circle cx={cx} cy={cy} r={nR} fill="rgba(212,168,67,0.08)" stroke="rgba(212,168,67,0.30)" strokeWidth={1.2} />
+          <text x={cx} y={cy+3.5*dotScale} textAnchor="middle" fontSize={compact?(long?"9":"11"):(long?"10":"12")} fill="rgba(212,168,67,0.45)" fontFamily="sans-serif" fontWeight="600">{lb}</text>
+        </g>);
+      }
+      // ── R35/R37モード: ハイライト音は強調、それ以外は薄いゴールド丸枠 ──
+      else if (isR35R37 && !hl && !isR) {
+        const nR = 11 * dotScale;
+        els.push(<g key={`n${si}_${f}`}>
+          <circle cx={cx} cy={cy} r={nR} fill="rgba(212,168,67,0.08)" stroke="rgba(212,168,67,0.30)" strokeWidth={1.2} />
+          <text x={cx} y={cy+3.5*dotScale} textAnchor="middle" fontSize={compact?(long?"9":"11"):(long?"10":"12")} fill="rgba(212,168,67,0.45)" fontFamily="sans-serif" fontWeight="600">{lb}</text>
+        </g>);
+      }
+      // ── R35/R37モードで前後ポジションのハイライト音: ゴールド強調 ──
+      else if (isR35R37 && neighbor && (hl || isR)) {
+        const nR = 11 * dotScale;
+        els.push(<g key={`n${si}_${f}`}>
+          <circle cx={cx} cy={cy} r={nR} fill={isR ? "rgba(232,135,74,0.25)" : "rgba(212,168,67,0.18)"} stroke={isR ? "rgba(232,135,74,0.50)" : "rgba(212,168,67,0.40)"} strokeWidth={1.2} />
+          <text x={cx} y={cy+3.5*dotScale} textAnchor="middle" fontSize={compact?(long?"9":"11"):(long?"10":"12")} fill={isR ? "rgba(232,135,74,0.75)" : "rgba(212,168,67,0.65)"} fontFamily="sans-serif" fontWeight="700">{lb}</text>
+        </g>);
+      }
+      // ── 3NPS/BOX/CAGED: 非アクティブ音 ──
+      else if (viewMode !== "全体" && viewMode !== "R35" && viewMode !== "R37" && viewMode !== "ルート" && !act) {
         if (neighbor) {
-          // つながり表示: 前後ポジションの音をはっきり目立つゴールド半透明で表示
+          // つながり表示: 前後ポジションの音をゴールド半透明で表示
           const nR = 11 * dotScale;
           const nIsR = pc === rootPc;
           els.push(<g key={`n${si}_${f}`}>
@@ -1124,15 +1150,17 @@ function Fretboard({ rootPc, scaleKey, showMode, viewMode, activeFrets, position
           // 通常のghost
           els.push(<g key={`n${si}_${f}`}><circle cx={cx} cy={cy} r={10*dotScale} fill={TH.ghostBg} /><text x={cx} y={cy+3.5*dotScale} textAnchor="middle" fontSize={compact?(long?"9":"10"):(long?"9":"11")} fill={TH.ghostFg} fontFamily="sans-serif" fontWeight="600">{lb}</text></g>);
         }
-      } else {
+      }
+      // ── アクティブ音（通常表示） ──
+      else {
         const r = (isR?14:12)*dotScale, bg = isR?TH.rootBg:TH.dotBg, fg = isR?TH.rootFg:TH.dotFg;
         const fs = compact ? (isR?(long?"11":"13"):(long?"10":"12")) : (isR?(long?"12":"15"):(long?"11":"14"));
         // R35/R37時: ハイライト音に度数別の外枠色
         let hlColor = null;
         if (hl && !isR) {
           const deg = degreeLabel(rootPc, pc, scaleKey);
-          if (deg === "3" || deg === "♭3") hlColor = "#e85a8a"; // ピンク: 3度
-          else hlColor = "#e8d44a"; // 黄: 5度/7度
+          if (deg === "3" || deg === "♭3") hlColor = "#e85a8a";
+          else hlColor = "#e8d44a";
         }
         const hlStroke = hlColor ? hlColor : (isR ? TH.rootStroke : "none");
         const hlStrokeW = hl ? 2.5 : (isR ? 1.5 : 0);
@@ -1624,6 +1652,8 @@ function ScaleCardRow({ pin, onRemove, onUpdate, onMoveUp, onMoveDown, index, sc
   const hasPositions = viewMode !== "全体" && viewMode !== "R35" && viewMode !== "R37" && viewMode !== "ルート" && total > 0;
 
   // 前後ポジションのfrets（つながり表示用）
+  // 前後ポジションのfretsに±12fのオクターブコピーも含め、
+  // フレット位置的に隣接する音もneighborとして表示する
   const neighborFrets = useMemo(() => {
     if (!showNeighbor || viewMode === "全体" || total <= 1) return null;
     const prevIdx = (safePos - 1 + total) % total;
@@ -1632,10 +1662,19 @@ function ScaleCardRow({ pin, onRemove, onUpdate, onMoveUp, onMoveDown, index, sc
     const next = pPositions[nextIdx]?.frets;
     if (!prev && !next) return null;
     const merged = {};
+    const numFrets = DEFAULT_NUM_FRETS;
     for (let si = 0; si < NUM_STRINGS; si++) {
       const set = new Set();
-      if (prev?.[si]) prev[si].forEach(f => set.add(f));
-      if (next?.[si]) next[si].forEach(f => set.add(f));
+      const addWithOctaves = (arr) => {
+        if (!arr) return;
+        for (const f of arr) {
+          if (f >= 0 && f <= numFrets) set.add(f);
+          if (f + 12 >= 0 && f + 12 <= numFrets) set.add(f + 12);
+          if (f - 12 >= 0 && f - 12 <= numFrets) set.add(f - 12);
+        }
+      };
+      addWithOctaves(prev?.[si]);
+      addWithOctaves(next?.[si]);
       merged[si] = [...set].sort((a, b) => a - b);
     }
     return merged;
