@@ -3507,6 +3507,7 @@ function Metronome() {
   const [playing, setPlaying] = useState(false);
   const [beat, setBeat] = useState(false);
   const [editingBpm, setEditingBpm] = useState(false);
+  const [audioError, setAudioError] = useState("");
   // 練習タイマー: playing中の経過時間を計測
   const [elapsedSec, setElapsedSec] = useState(0);
   const [totalPracticeSec, setTotalPracticeSec] = useState(0); // 累計
@@ -3535,28 +3536,36 @@ function Metronome() {
     return m > 0 ? `${m}分${s.toString().padStart(2, "0")}秒` : `${s}秒`;
   };
   const playClick = useCallback(async () => {
-    if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
-    const ctx = audioCtxRef.current;
-    // suspended状態ならresumeを待ってから発音（モバイル対応）
-    if (ctx.state === "suspended") {
-      try {
+    try {
+      const AudioCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtor) {
+        throw new Error("AudioContext is not supported");
+      }
+      if (!audioCtxRef.current) audioCtxRef.current = new AudioCtor();
+      const ctx = audioCtxRef.current;
+      // suspended状態ならresumeを待ってから発音（モバイル対応）
+      if (ctx.state === "suspended") {
         await ctx.resume();
-      } catch {}
+      }
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = 880;
+      osc.type = "sine";
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.08);
+      setAudioError("");
+      setBeat(true);
+      // 前回のtimeoutをクリアしてから新規セット
+      if (beatTimeoutRef.current) clearTimeout(beatTimeoutRef.current);
+      beatTimeoutRef.current = setTimeout(() => setBeat(false), 80);
+    } catch (err) {
+      setAudioError("音声を開始できませんでした。ブラウザの音声許可を確認してください。");
+      setPlaying(false);
     }
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.frequency.value = 880;
-    osc.type = "sine";
-    gain.gain.setValueAtTime(0.3, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
-    osc.start(ctx.currentTime);
-    osc.stop(ctx.currentTime + 0.08);
-    setBeat(true);
-    // 前回のtimeoutをクリアしてから新規セット
-    if (beatTimeoutRef.current) clearTimeout(beatTimeoutRef.current);
-    beatTimeoutRef.current = setTimeout(() => setBeat(false), 80);
   }, []);
 
   // playing/bpm変更時の処理
@@ -3587,6 +3596,10 @@ function Metronome() {
     fontWeight: 700,
     borderRadius: "6px",
     transition: "all 0.12s"
+  };
+  const togglePlaying = () => {
+    if (!playing) setAudioError("");
+    setPlaying(p => !p);
   };
   const [expanded, setExpanded] = useState(false);
   useEffect(() => {
@@ -3712,7 +3725,7 @@ function Metronome() {
       flexWrap: "wrap"
     }
   }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => setPlaying(!playing),
+    onClick: togglePlaying,
     style: {
       ...btnStyle,
       fontSize: "16px",
@@ -3795,7 +3808,20 @@ function Metronome() {
       background: beat ? TH.rootBg : TH.border,
       transition: "background 0.05s"
     }
-  })), /*#__PURE__*/React.createElement("div", {
+  })), audioError && /*#__PURE__*/React.createElement("div", {
+    role: "alert",
+    style: {
+      margin: "2px 8px 4px",
+      padding: "6px 8px",
+      borderRadius: "6px",
+      background: "rgba(196,68,68,0.14)",
+      border: "1px solid rgba(196,68,68,0.45)",
+      color: "#ff9a9a",
+      fontSize: "12px",
+      fontWeight: 600,
+      textAlign: "center"
+    }
+  }, audioError), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
