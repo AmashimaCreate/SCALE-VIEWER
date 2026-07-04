@@ -11,6 +11,13 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { background: #0c0c0c; }
 button:hover { filter: brightness(1.12); }
+button:focus-visible,
+input:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid #d4a843 !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 0 4px rgba(212,168,67,0.22) !important;
+}
 /* タップ可能な要素のhover/active */
 .sv-tappable { cursor: pointer; transition: all 0.12s; }
 .sv-tappable:hover { filter: brightness(1.15); }
