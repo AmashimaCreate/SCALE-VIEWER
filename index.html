@@ -3290,6 +3290,8 @@ function RootPicker({
       e.stopPropagation();
       onToggleFlat(false);
     },
+    "aria-label": "\u30B7\u30E3\u30FC\u30D7\u8868\u8A18\u306B\u5207\u308A\u66FF\u3048",
+    "aria-pressed": !useFlat,
     style: {
       border: "none",
       cursor: "pointer",
@@ -3307,6 +3309,8 @@ function RootPicker({
       e.stopPropagation();
       onToggleFlat(true);
     },
+    "aria-label": "\u30D5\u30E9\u30C3\u30C8\u8868\u8A18\u306B\u5207\u308A\u66FF\u3048",
+    "aria-pressed": useFlat,
     style: {
       border: "none",
       cursor: "pointer",
@@ -3337,6 +3341,8 @@ function RootPicker({
         e.stopPropagation();
         onSelect(i);
       },
+      "aria-label": `\u30EB\u30FC\u30C8 ${n} \u3092\u9078\u629E`,
+      "aria-pressed": selected,
       style: {
         border: "none",
         cursor: "pointer",
@@ -3394,6 +3400,8 @@ function ScalePicker({
       e.stopPropagation();
       setActiveCat(i);
     },
+    "aria-label": `\u30B9\u30B1\u30FC\u30EB\u30AB\u30C6\u30B4\u30EA ${c.label} \u3092\u9078\u629E`,
+    "aria-pressed": activeCat === i,
     style: {
       border: "none",
       cursor: "pointer",
@@ -3426,6 +3434,8 @@ function ScalePicker({
       e.stopPropagation();
       onSelect(name);
     },
+    "aria-label": `${name} \u30B9\u30B1\u30FC\u30EB\u3092\u9078\u629E`,
+    "aria-pressed": currentScale === name,
     style: {
       border: "none",
       cursor: "pointer",
@@ -3481,6 +3491,7 @@ function AddScaleModal({
     }
   }, "\u30B9\u30B1\u30FC\u30EB\u3092\u8FFD\u52A0"), /*#__PURE__*/React.createElement("button", {
     onClick: onClose,
+    "aria-label": "\u30B9\u30B1\u30FC\u30EB\u8FFD\u52A0\u3092\u9589\u3058\u308B",
     style: {
       border: "none",
       cursor: "pointer",
@@ -3623,6 +3634,15 @@ function Metronome() {
   if (!expanded) {
     return /*#__PURE__*/React.createElement("div", {
       onClick: () => setExpanded(true),
+      role: "button",
+      tabIndex: 0,
+      "aria-label": "\u30E1\u30C8\u30ED\u30CE\u30FC\u30E0\u3092\u958B\u304F",
+      onKeyDown: e => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setExpanded(true);
+        }
+      },
       style: {
         display: "flex",
         alignItems: "center",
@@ -3717,6 +3737,7 @@ function Metronome() {
     }
   }, "\u30E1\u30C8\u30ED\u30CE\u30FC\u30E0")), !playing && /*#__PURE__*/React.createElement("button", {
     onClick: () => setExpanded(false),
+    "aria-label": "\u30E1\u30C8\u30ED\u30CE\u30FC\u30E0\u3092\u9589\u3058\u308B",
     style: {
       border: "none",
       cursor: "pointer",
@@ -3741,6 +3762,8 @@ function Metronome() {
     }
   }, /*#__PURE__*/React.createElement("button", {
     onClick: togglePlaying,
+    "aria-label": playing ? "\u30E1\u30C8\u30ED\u30CE\u30FC\u30E0\u3092\u505C\u6B62" : "\u30E1\u30C8\u30ED\u30CE\u30FC\u30E0\u3092\u958B\u59CB",
+    "aria-pressed": playing,
     style: {
       ...btnStyle,
       fontSize: "16px",
@@ -3756,6 +3779,7 @@ function Metronome() {
     }
   }, /*#__PURE__*/React.createElement("button", {
     onClick: () => setBpm(b => Math.max(40, b - 5)),
+    "aria-label": "BPM\u30925\u4E0B\u3052\u308B",
     style: {
       ...btnStyle,
       fontSize: "15px",
@@ -3793,6 +3817,15 @@ function Metronome() {
   }) : /*#__PURE__*/React.createElement("span", {
     className: "sv-tappable",
     onClick: () => setEditingBpm(true),
+    role: "button",
+    tabIndex: 0,
+    "aria-label": "BPM\u3092\u76F4\u63A5\u5165\u529B",
+    onKeyDown: e => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        setEditingBpm(true);
+      }
+    },
     style: {
       fontSize: "22px",
       fontWeight: 700,
@@ -3808,6 +3841,7 @@ function Metronome() {
     }
   }, bpm), /*#__PURE__*/React.createElement("button", {
     onClick: () => setBpm(b => Math.min(240, b + 5)),
+    "aria-label": "BPM\u30925\u4E0A\u3052\u308B",
     style: {
       ...btnStyle,
       fontSize: "15px",
@@ -4060,6 +4094,17 @@ function ScaleCardRow({
       setRootPopup(!rootPopup);
       setScalePopup(false);
     },
+    role: "button",
+    tabIndex: 0,
+    "aria-label": `${pRootSpelling} \u306E\u30EB\u30FC\u30C8\u3092\u5909\u66F4`,
+    "aria-expanded": rootPopup,
+    onKeyDown: e => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        setRootPopup(!rootPopup);
+        setScalePopup(false);
+      }
+    },
     style: {
       ...tappableStyle,
       color: accentColor,
@@ -4082,6 +4127,17 @@ function ScaleCardRow({
       setScalePopup(!scalePopup);
       setRootPopup(false);
     },
+    role: "button",
+    tabIndex: 0,
+    "aria-label": `${pScale} \u30B9\u30B1\u30FC\u30EB\u3092\u5909\u66F4`,
+    "aria-expanded": scalePopup,
+    onKeyDown: e => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        setScalePopup(!scalePopup);
+        setRootPopup(false);
+      }
+    },
     style: {
       ...tappableStyle,
       color: TH.scaleName,
@@ -4101,6 +4157,8 @@ function ScaleCardRow({
       e.stopPropagation();
       setDetailOpen(!detailOpen);
     },
+    "aria-label": detailOpen ? "\u8A73\u7D30\u3092\u9589\u3058\u308B" : "\u8A73\u7D30\u3092\u958B\u304F",
+    "aria-expanded": detailOpen,
     style: {
       border: "none",
       cursor: "pointer",
@@ -4152,6 +4210,7 @@ function ScaleCardRow({
       e.stopPropagation();
       onMoveUp();
     },
+    "aria-label": `${pRootSpelling} ${pScale} \u3092\u4E0A\u3078\u79FB\u52D5`,
     style: {
       border: "none",
       cursor: "pointer",
@@ -4174,6 +4233,7 @@ function ScaleCardRow({
       e.stopPropagation();
       onMoveDown();
     },
+    "aria-label": `${pRootSpelling} ${pScale} \u3092\u4E0B\u3078\u79FB\u52D5`,
     style: {
       border: "none",
       cursor: "pointer",
@@ -4196,6 +4256,7 @@ function ScaleCardRow({
       e.stopPropagation();
       setConfirmDelete(true);
     },
+    "aria-label": `${pRootSpelling} ${pScale} \u3092\u524A\u9664`,
     style: {
       border: "none",
       cursor: "pointer",
@@ -4421,6 +4482,7 @@ function ScaleCardRow({
     onClick: () => onUpdate({
       showMode: showMode === "音名" ? "度数" : "音名"
     }),
+    "aria-label": showMode === "\u97F3\u540D" ? "\u5EA6\u6570\u8868\u793A\u306B\u5207\u308A\u66FF\u3048" : "\u97F3\u540D\u8868\u793A\u306B\u5207\u308A\u66FF\u3048",
     style: {
       border: `1.5px solid ${TH.border}`,
       cursor: "pointer",
@@ -4456,6 +4518,8 @@ function ScaleCardRow({
     return /*#__PURE__*/React.createElement("button", {
       className: "sv-tappable sv-flash-border",
       onClick: cycleDisplay,
+      "aria-label": "\u8868\u793A\u7BC4\u56F2\u3092\u5207\u308A\u66FF\u3048",
+      "aria-pressed": isDisplayCycle && viewMode !== "\u5168\u4F53",
       style: {
         border: `1.5px solid ${isDisplayCycle && viewMode !== "全体" ? TH.gold : TH.border}`,
         cursor: "pointer",
@@ -4478,6 +4542,8 @@ function ScaleCardRow({
     return /*#__PURE__*/React.createElement("button", {
       key: m,
       onClick: () => changeView(m),
+      "aria-label": `${m} \u30DD\u30B8\u30B7\u30E7\u30F3\u8868\u793A\u306B\u5207\u308A\u66FF\u3048`,
+      "aria-pressed": viewMode === m,
       style: {
         border: "none",
         cursor: "pointer",
@@ -4504,6 +4570,7 @@ function ScaleCardRow({
     onClick: () => onUpdate({
       selectedPos: (safePos - 1 + total) % total
     }),
+    "aria-label": "\u524D\u306E\u30DD\u30B8\u30B7\u30E7\u30F3\u3078\u79FB\u52D5",
     style: {
       border: "none",
       cursor: "pointer",
@@ -4533,6 +4600,7 @@ function ScaleCardRow({
     onClick: () => onUpdate({
       selectedPos: (safePos + 1) % total
     }),
+    "aria-label": "\u6B21\u306E\u30DD\u30B8\u30B7\u30E7\u30F3\u3078\u79FB\u52D5",
     style: {
       border: "none",
       cursor: "pointer",
@@ -4554,6 +4622,8 @@ function ScaleCardRow({
     onClick: () => onUpdate({
       showNeighbor: !showNeighbor
     }),
+    "aria-label": "\u524D\u5F8C\u306E\u3064\u306A\u304C\u308A\u8868\u793A\u3092\u5207\u308A\u66FF\u3048",
+    "aria-pressed": showNeighbor,
     style: {
       border: `1px solid ${showNeighbor ? TH.gold : TH.border}`,
       cursor: "pointer",
@@ -4808,6 +4878,7 @@ function GuitarScaleViewer() {
     }
   }, /*#__PURE__*/React.createElement("button", {
     onClick: () => setAddModalOpen(true),
+    "aria-label": "\u30B9\u30B1\u30FC\u30EB\u3092\u8FFD\u52A0",
     style: {
       width: "100%",
       border: `1.5px dashed ${TH.goldDim}`,
@@ -4829,6 +4900,7 @@ function GuitarScaleViewer() {
     }
   }, scales.length > 0 && /*#__PURE__*/React.createElement("button", {
     onClick: () => setConfirmClearAll(true),
+    "aria-label": "\u3059\u3079\u3066\u306E\u30B9\u30B1\u30FC\u30EB\u3092\u30AF\u30EA\u30A2",
     style: {
       flex: "1 1 0",
       border: "none",
@@ -4845,6 +4917,8 @@ function GuitarScaleViewer() {
     }
   }, "\u3059\u3079\u3066\u30AF\u30EA\u30A2"), /*#__PURE__*/React.createElement("button", {
     onClick: () => setPresetOpen(!presetOpen),
+    "aria-label": "\u4ECA\u306E\u914D\u7F6E\u4FDD\u5B58\u30D1\u30CD\u30EB\u3092\u958B\u9589",
+    "aria-expanded": presetOpen,
     style: {
       flex: "1 1 0",
       border: "none",
@@ -4935,6 +5009,7 @@ function GuitarScaleViewer() {
     }
   }, /*#__PURE__*/React.createElement("button", {
     onClick: () => setConfirmLoadPreset(p),
+    "aria-label": `${p.name} \u3092\u547C\u3073\u51FA\u3059`,
     style: {
       flex: "1 1 0",
       border: "none",
@@ -4962,6 +5037,7 @@ function GuitarScaleViewer() {
     }
   }, "(", p.scales.map(s => (s.rootSpelling || inferRootSpelling(s.root, s.useFlat)) + " " + s.scaleName).join(", "), ")")), /*#__PURE__*/React.createElement("button", {
     onClick: () => deletePreset(p.id),
+    "aria-label": `${p.name} \u3092\u524A\u9664`,
     style: {
       border: "none",
       cursor: "pointer",
