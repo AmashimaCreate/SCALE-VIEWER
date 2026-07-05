@@ -82,13 +82,14 @@ const {
 } = React;
 
 // ============================================================
-// Guitar Scale Viewer v1.5 — プリセット・共有URL・PWA対応
+// Guitar Scale Viewer v1.6 — 指板タップ音対応
 // ============================================================
 
 const NOTES_SHARP = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const NOTES_FLAT = ["C", "D♭", "D", "E♭", "E", "F", "G♭", "G", "A♭", "A", "B♭", "B"];
 const TUNING = [4, 9, 2, 7, 11, 4];
 const TUNING_NAMES = ["E", "A", "D", "G", "B", "E"];
+const GUITAR_OPEN_MIDI = [40, 45, 50, 55, 59, 64];
 const NUM_STRINGS = 6;
 const DEFAULT_NUM_FRETS = 21;
 const FRET_MARKERS = [3, 5, 7, 9, 12, 15, 17, 19, 21];
@@ -273,6 +274,57 @@ const ACCENT_COLORS = ["#e8874a", "#4a90d9", "#6ec87a", "#c975d1", "#d4a843"];
 // ── Utility ──
 function noteAt(si, fret) {
   return (TUNING[si] + fret) % 12;
+}
+function midiToFrequency(midi) {
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+let fretAudioContext = null;
+let activeFretVoices = [];
+function getFretAudioContext() {
+  const AudioCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtor) return null;
+  if (!fretAudioContext) fretAudioContext = new AudioCtor();
+  return fretAudioContext;
+}
+function playFretNote(si, fret) {
+  const ctx = getFretAudioContext();
+  if (!ctx) return;
+  if (ctx.state === "suspended") ctx.resume().catch(() => {});
+  const now = ctx.currentTime;
+  const midi = GUITAR_OPEN_MIDI[si] + fret;
+  const freq = midiToFrequency(midi);
+  activeFretVoices = activeFretVoices.filter(stop => typeof stop === "function").slice(-5);
+  const osc = ctx.createOscillator();
+  const filter = ctx.createBiquadFilter();
+  const gain = ctx.createGain();
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(freq, now);
+  filter.type = "lowpass";
+  filter.frequency.setValueAtTime(Math.min(4200, freq * 5), now);
+  filter.Q.setValueAtTime(0.7, now);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.18, now + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.75);
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(ctx.destination);
+  const stop = () => {
+    try {
+      osc.stop();
+    } catch {}
+    try {
+      osc.disconnect();
+      filter.disconnect();
+      gain.disconnect();
+    } catch {}
+  };
+  activeFretVoices.push(stop);
+  while (activeFretVoices.length > 6) {
+    const oldStop = activeFretVoices.shift();
+    if (oldStop) oldStop();
+  }
+  osc.start(now);
+  window.setTimeout(stop, 850);
 }
 function noteName(pc, flat) {
   return (flat ? NOTES_FLAT : NOTES_SHARP)[pc % 12];
@@ -3216,6 +3268,24 @@ function Fretboard({
 	          }
 	        }));
 	      }
+	      els.push( /*#__PURE__*/React.createElement("circle", {
+	        key: `tap${si}_${f}`,
+	        cx: cx,
+	        cy: cy,
+	        r: 18 * dotScale,
+	        fill: "rgba(255,255,255,0.001)",
+	        stroke: "transparent",
+	        "data-note-audio": `${si}:${f}`,
+	        "aria-label": `${TUNING_NAMES[si]}\u5F26 ${f}\u30D5\u30EC\u30C3\u30C8 ${getNoteLabel(pc)} \u3092\u9CF4\u3089\u3059`,
+	        onClick: e => {
+	          e.stopPropagation();
+	          playFretNote(si, f);
+	        },
+	        style: {
+	          cursor: "pointer",
+	          touchAction: "manipulation"
+	        }
+	      }));
 	    }
 	  }
   const scrollRef = useRef(null);
@@ -5396,7 +5466,7 @@ function GuitarScaleViewer() {
       color: TH.dim,
       opacity: 0.4
     }
-	  }, "\u30B9\u30B1\u30FC\u30EB\u30D3\u30E5\u30FC\u30A2 v1.5"), /*#__PURE__*/React.createElement(AddScaleModal, {
+	  }, "\u30B9\u30B1\u30FC\u30EB\u30D3\u30E5\u30FC\u30A2 v1.6"), /*#__PURE__*/React.createElement(AddScaleModal, {
     open: addModalOpen,
     onClose: () => setAddModalOpen(false),
     onAdd: addScale,
