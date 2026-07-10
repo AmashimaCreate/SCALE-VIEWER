@@ -4212,23 +4212,39 @@ function ScaleCardRow({
   const hasPositions = viewMode !== "全体" && viewMode !== "R35" && viewMode !== "R37" && viewMode !== "ルート" && total > 0;
 
   // 前後ポジションのfrets（つながり表示用）
-  // 各ポジションに定義された音だけを補助表示する
+  // 各shapeを現在位置のすぐ左・右のオクターブへ揃えて補助表示する
   const neighborFrets = useMemo(() => {
     if (!showNeighbor || viewMode === "全体" || total <= 1) return null;
     const prevIdx = (safePos - 1 + total) % total;
     const nextIdx = (safePos + 1) % total;
-    const prev = pPositions[prevIdx]?.frets;
-    const next = pPositions[nextIdx]?.frets;
-    if (!prev && !next) return null;
+    const current = pPositions[safePos];
+    const prev = pPositions[prevIdx];
+    const next = pPositions[nextIdx];
+    if (!current || (!prev && !next)) return null;
+
+    const currentCenter = (current.lo + current.hi) / 2;
+    const alignShift = (position, direction) => {
+      if (!position) return 0;
+      const center = (position.lo + position.hi) / 2;
+      let shift = Math.round((currentCenter - center) / 12) * 12;
+      if (direction < 0 && center + shift >= currentCenter) shift -= 12;
+      if (direction > 0 && center + shift <= currentCenter) shift += 12;
+      return shift;
+    };
+    const prevShift = alignShift(prev, -1);
+    const nextShift = alignShift(next, 1);
     const merged = {};
     for (let si = 0; si < NUM_STRINGS; si++) {
       const set = new Set();
-      const addFrets = arr => {
+      const addFrets = (arr, shift) => {
         if (!arr) return;
-        for (const f of arr) set.add(f);
+        for (const f of arr) {
+          const alignedFret = f + shift;
+          if (alignedFret >= 0 && alignedFret <= DEFAULT_NUM_FRETS) set.add(alignedFret);
+        }
       };
-      addFrets(prev?.[si]);
-      addFrets(next?.[si]);
+      addFrets(prev?.frets?.[si], prevShift);
+      addFrets(next?.frets?.[si], nextShift);
       merged[si] = [...set].sort((a, b) => a - b);
     }
     return merged;
