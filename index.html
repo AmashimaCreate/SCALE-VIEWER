@@ -4212,8 +4212,7 @@ function ScaleCardRow({
   const hasPositions = viewMode !== "全体" && viewMode !== "R35" && viewMode !== "R37" && viewMode !== "ルート" && total > 0;
 
   // 前後ポジションのfrets（つながり表示用）
-  // 前後ポジションのfretsに±12fのオクターブコピーも含め、
-  // フレット位置的に隣接する音もneighborとして表示する
+  // 各ポジションに定義された音だけを補助表示する
   const neighborFrets = useMemo(() => {
     if (!showNeighbor || viewMode === "全体" || total <= 1) return null;
     const prevIdx = (safePos - 1 + total) % total;
@@ -4222,19 +4221,14 @@ function ScaleCardRow({
     const next = pPositions[nextIdx]?.frets;
     if (!prev && !next) return null;
     const merged = {};
-    const numFrets = DEFAULT_NUM_FRETS;
     for (let si = 0; si < NUM_STRINGS; si++) {
       const set = new Set();
-      const addWithOctaves = arr => {
+      const addFrets = arr => {
         if (!arr) return;
-        for (const f of arr) {
-          if (f >= 0 && f <= numFrets) set.add(f);
-          if (f + 12 >= 0 && f + 12 <= numFrets) set.add(f + 12);
-          if (f - 12 >= 0 && f - 12 <= numFrets) set.add(f - 12);
-        }
+        for (const f of arr) set.add(f);
       };
-      addWithOctaves(prev?.[si]);
-      addWithOctaves(next?.[si]);
+      addFrets(prev?.[si]);
+      addFrets(next?.[si]);
       merged[si] = [...set].sort((a, b) => a - b);
     }
     return merged;
